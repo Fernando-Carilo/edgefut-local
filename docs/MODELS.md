@@ -201,8 +201,10 @@ impliedProbability = 1 / odd
 overround = Σ implied_j − 1
 ```
 
-Dois métodos de remoção de margem, **ambos calculados e armazenados** em cada
-`odds_snapshot`; o que alimenta o Edge é escolhido em Configurações
+Dois métodos de remoção de margem, **ambos calculados e gravados** em cada
+seleção da análise (`fair_multiplicative`, `fair_shin`, `shin_z`) e, por
+consequência, no `prediction_snapshot`; o que alimenta o Edge é escolhido em
+Configurações
 (`margin_method`, padrão `MULTIPLICATIVE`):
 
 - **Multiplicativa**: `fair_i = implied_i / Σ implied_j`.

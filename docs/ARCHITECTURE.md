@@ -138,7 +138,9 @@ Migrations versionadas em `db/migrations.py` (SQL idempotente, tabela
 ### 4.3 Histórico de odds
 
 Cada coleta grava uma linha em `odds_snapshot` (event, market, selection, line,
-price, collected_at, e as probabilidades justas **Shin e multiplicativa**). A odd
+price, collected_at). As probabilidades justas **Shin e multiplicativa** são
+calculadas na análise e gravadas em cada seleção (`fair_shin`,
+`fair_multiplicative`), portanto ficam no `prediction_snapshot`. A odd
 "atual" é o último snapshot; a "inicial" é o primeiro. `LineMovement`
 (`odds/implied.py`) deriva abertura → atual, variação % e probabilidade implícita
 antes/depois ("1,72 → 1,54 −10,5 % · 58,1 % → 64,9 %"); movimentos acima do

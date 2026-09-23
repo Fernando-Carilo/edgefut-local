@@ -44,8 +44,8 @@ em 2026-09-23 (intervalo internacional de seleções, sem ligas de clubes na ofe
 - `core/logging.py` — JSON estruturado com `correlation_id`; `core/context.py`.
 
 ### C. Odds V2
-- `odds/shin.py` — remoção de margem de Shin (z por bisseção). `fair_multiplicative` e `fair_shin` gravadas em toda seleção; `Settings.margin_method` escolhe a exibida.
-- `odds/movement.py` — `LineMovement`; `closing_line` capturada pelo job `closing_lines` imediatamente antes do kickoff, **nunca** usada para recomendar.
+- `odds/implied.py::remove_margin_shin` — remoção de margem de Shin (z por bisseção). `fair_multiplicative` e `fair_shin` gravadas em toda seleção da análise (e, portanto, no `prediction_snapshot`); `Settings.margin_method` escolhe a exibida.
+- `odds/implied.py::LineMovement` e `odds/closing.py` — movimento de linha; `closing_line` capturada pelo job `closing_lines` imediatamente antes do kickoff, **nunca** usada para recomendar.
 - Correção: `odds_collected_at` = última confirmação (não última mudança de preço) — antes 31/48 jogos apareciam STALE indevidamente.
 
 ### D. Backtest anti-leakage
