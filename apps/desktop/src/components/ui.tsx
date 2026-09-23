@@ -1,9 +1,129 @@
-import type { Grade, NoBetReason, RecommendationStatus, VenueStatus } from "@edgefut/contracts";
-import { NO_BET_LABELS } from "@edgefut/contracts";
+import type { EvidenceLevel, FreshnessStatus, Grade, HealthStatus, NoBetReason, OpportunityLabel, RecommendationStatus, VenueStatus } from "@edgefut/contracts";
+import { EVIDENCE_LABELS, FRESHNESS_LABELS, HEALTH_LABELS, LABEL_TEXT, NO_BET_LABELS } from "@edgefut/contracts";
 import { pct, venueLabel } from "@edgefut/shared";
 import clsx from "clsx";
-import { AlertTriangle, Info, Loader2 } from "lucide-react";
+import { AlertTriangle, Info, Loader2, ShieldCheck, ShieldOff } from "lucide-react";
 import type { ReactNode } from "react";
+
+/** Idade em segundos → "há 18 s" / "há 4 min" / "há 2 h". */
+export function ageLabel(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "—";
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 90) return `há ${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `há ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `há ${h} h`;
+  return `há ${Math.round(h / 24)} d`;
+}
+
+const freshnessCls: Record<FreshnessStatus, string> = {
+  FRESH: "bg-success-50 text-success",
+  AGING: "bg-info-50 text-info",
+  STALE: "bg-warning-50 text-warning",
+  EXPIRED: "bg-danger-50 text-danger",
+  UNAVAILABLE: "bg-gray-100 text-ink-3",
+};
+
+export function FreshnessChip({ status, ageSeconds, label, title }: { status: FreshnessStatus | null | undefined; ageSeconds?: number | null; label?: string; title?: string }) {
+  if (!status) return null;
+  return (
+    <span className={clsx("chip", freshnessCls[status])} title={title ?? `${label ? `${label}: ` : ""}${FRESHNESS_LABELS[status]}`}>
+      {label ? `${label} ` : ""}
+      {FRESHNESS_LABELS[status]}
+      {ageSeconds !== undefined && ageSeconds !== null ? ` · ${ageLabel(ageSeconds)}` : ""}
+    </span>
+  );
+}
+
+const healthCls: Record<HealthStatus, string> = {
+  HEALTHY: "bg-success-50 text-success",
+  DEGRADED: "bg-warning-50 text-warning",
+  STALE: "bg-warning-50 text-warning",
+  UNAVAILABLE: "bg-danger-50 text-danger",
+};
+
+export function HealthChip({ status }: { status: HealthStatus | null | undefined }) {
+  if (!status) return <span className="chip bg-gray-100 text-ink-3">—</span>;
+  return <span className={clsx("chip", healthCls[status])}>{HEALTH_LABELS[status]}</span>;
+}
+
+export function HealthDot({ status, className }: { status: HealthStatus | null | undefined; className?: string }) {
+  const c = status === "HEALTHY" ? "bg-success" : status === "DEGRADED" || status === "STALE" ? "bg-warning" : status === "UNAVAILABLE" ? "bg-danger" : "bg-gray-300";
+  return <span className={clsx("inline-block h-2 w-2 rounded-full", c, className)} />;
+}
+
+/** SAFE ≠ VALUE: alta probabilidade não implica valor e vice-versa. */
+export function LabelChip({ label }: { label: OpportunityLabel | null | undefined }) {
+  if (!label) return null;
+  const cls = label === "VALUE" ? "bg-primary-50 text-primary" : label === "HIGH_PROBABILITY" ? "bg-info-50 text-info" : "bg-success-50 text-success";
+  const tip =
+    label === "VALUE"
+      ? "VALUE: edge/EV acima do limiar. Não significa alta probabilidade de acerto."
+      : label === "HIGH_PROBABILITY"
+        ? "HIGH PROBABILITY: probabilidade do modelo alta. Não significa que a odd tenha valor."
+        : "Probabilidade alta E edge positivo ao mesmo tempo.";
+  return (
+    <span className={clsx("chip", cls)} title={tip}>
+      {LABEL_TEXT[label]}
+    </span>
+  );
+}
+
+const evidenceCls: Record<EvidenceLevel, string> = {
+  SETTLED: "bg-success-50 text-success",
+  BACKTEST_ODDS: "bg-info-50 text-info",
+  MODEL_ONLY: "bg-warning-50 text-warning",
+};
+
+export function EvidenceChip({ level, compact }: { level: EvidenceLevel | null | undefined; compact?: boolean }) {
+  if (!level) return null;
+  const short = level === "SETTLED" ? "EVIDÊNCIA: SETTLED" : level === "BACKTEST_ODDS" ? "EVIDÊNCIA: BACKTEST" : "MODEL ONLY";
+  return (
+    <span className={clsx("chip", evidenceCls[level])} title={EVIDENCE_LABELS[level]}>
+      {compact ? short : EVIDENCE_LABELS[level]}
+    </span>
+  );
+}
+
+export function GateChip({ passed, failed }: { passed: boolean; failed?: string[] }) {
+  return (
+    <span
+      className={clsx("chip inline-flex items-center gap-1", passed ? "bg-success-50 text-success" : "bg-gray-100 text-ink-2")}
+      title={passed ? "Passou em todos os checks do Quality Gate" : `Quality Gate: falhou em ${failed?.length ? failed.join(", ") : "algum check"}`}
+    >
+      {passed ? <ShieldCheck size={11} /> : <ShieldOff size={11} />}
+      {passed ? "GATE OK" : "GATE"}
+    </span>
+  );
+}
+
+/** Contador do cabeçalho do Radar / Dashboard. */
+export function Counter({ label, value, hint, accent, onClick }: { label: string; value: ReactNode; hint?: string; accent?: string; onClick?: () => void }) {
+  return (
+    <div className={clsx("card flex flex-col gap-0.5 px-3 py-2.5", onClick && "card-hover")} onClick={onClick} title={hint}>
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-3">{label}</span>
+      <span className={clsx("text-xl font-bold tabular-nums leading-tight", accent)}>{value}</span>
+      {hint && <span className="truncate text-[11px] text-ink-2">{hint}</span>}
+    </div>
+  );
+}
+
+export function Modal({ title, onClose, children, wide }: { title: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className={clsx("card max-h-[90vh] w-full overflow-y-auto p-5", wide ? "max-w-3xl" : "max-w-xl")} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-bold">{title}</h2>
+          <button className="btn-ghost" onClick={onClose} aria-label="Fechar">
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export function Card({ className, children, hover, onClick }: { className?: string; children: ReactNode; hover?: boolean; onClick?: () => void }) {
   return (

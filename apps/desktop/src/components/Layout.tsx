@@ -11,20 +11,25 @@ import {
   History,
   Home,
   Layers,
+  ListChecks,
   Radar,
   Search,
   Settings,
   Star,
+  Stethoscope,
   Target,
   Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
+import { HEALTH_LABELS } from "@edgefut/contracts";
+
 import { api } from "@/lib/api";
 import { useUi } from "@/store/ui";
 
 import { GlobalSearch } from "./GlobalSearch";
+import { HealthDot } from "./ui";
 
 type NavItem = { to: string; label: string; icon: typeof Home; end?: boolean };
 const nav: { title: string | null; items: NavItem[] }[] = [
@@ -50,7 +55,15 @@ const nav: { title: string | null; items: NavItem[] }[] = [
       { to: "/performance", label: "Performance", icon: BarChart3 },
     ],
   },
-  { title: "Sistema", items: [{ to: "/configuracoes", label: "Configurações", icon: Settings }] },
+  {
+    title: "Sistema",
+    items: [
+      { to: "/alertas", label: "Alertas", icon: Bell },
+      { to: "/sistema/jobs", label: "Jobs", icon: ListChecks },
+      { to: "/sistema/diagnostico", label: "Diagnóstico", icon: Stethoscope },
+      { to: "/configuracoes", label: "Configurações", icon: Settings },
+    ],
+  },
 ];
 
 export function Layout() {
@@ -58,6 +71,8 @@ export function Layout() {
   const collapsed = useUi((s) => s.sidebarCollapsed);
   const navigate = useNavigate();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15000, retry: 1 });
+  const sys = useQuery({ queryKey: ["system-health"], queryFn: api.systemHealth, refetchInterval: 30000, retry: 1 });
+  const alerts = useQuery({ queryKey: ["alerts", "unread-count"], queryFn: () => api.alerts({ limit: 1, unread_only: true }), refetchInterval: 30000, retry: 1 });
   const searchRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -136,8 +151,19 @@ export function Layout() {
             <kbd className="rounded border border-line bg-card px-1.5 text-[10px] font-semibold">Ctrl K</kbd>
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <button className="btn-ghost" title="Alertas (em breve)">
+            {sys.data && (
+              <button className="btn-ghost inline-flex items-center gap-1.5 text-xs" title={`Saúde do sistema: ${HEALTH_LABELS[sys.data.overall]}`} onClick={() => navigate("/sistema/diagnostico")}>
+                <HealthDot status={sys.data.overall} />
+                <span className="hidden lg:inline">{HEALTH_LABELS[sys.data.overall]}</span>
+              </button>
+            )}
+            <button className="btn-ghost relative" title="Alertas locais" onClick={() => navigate("/alertas")}>
               <Bell size={16} />
+              {(alerts.data?.unread ?? 0) > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 grid min-w-[16px] place-items-center rounded-full bg-primary px-1 text-[9px] font-bold leading-4 text-white">
+                  {Math.min(99, alerts.data!.unread)}
+                </span>
+              )}
             </button>
             <button className="btn-primary" onClick={() => navigate("/radar")}>
               <Radar size={15} /> Radar

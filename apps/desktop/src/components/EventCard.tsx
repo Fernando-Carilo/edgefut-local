@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useUi } from "@/store/ui";
 
-import { DemoChip, EdgeValue, GradeBadge, NoBetChip, StatusChip, VenueChip } from "./ui";
+import { DemoChip, EdgeValue, EvidenceChip, GateChip, GradeBadge, LabelChip, NoBetChip, StatusChip, VenueChip } from "./ui";
 
 export function EventRow({ event, onFavorite }: { event: EventSummary; onFavorite?: (id: number, on: boolean) => void }) {
   const navigate = useNavigate();
@@ -99,10 +99,28 @@ export function RecommendationCard({ event, rec, compact }: { event: EventSummar
         <Mini k="Edge" v={<EdgeValue value={rec.edge_pp} />} />
         {!compact && <Mini k="EV" v={<span className={rec.ev_pct > 0 ? "text-success" : "text-danger"}>{rec.ev_pct > 0 ? "+" : ""}{rec.ev_pct.toFixed(1)}%</span>} />}
       </div>
+      {(rec.label || rec.evidence || rec.quality_gate) && (
+        <div className="flex flex-wrap items-center gap-1">
+          <LabelChip label={rec.label} />
+          {rec.quality_gate && <GateChip passed={rec.quality_gate.passed} failed={rec.quality_gate.failed} />}
+          <EvidenceChip level={rec.evidence} compact />
+          {rec.model_prob_calibrated !== null && rec.calibration_reliable && <span className="chip bg-gray-100 text-ink-2">CALIBRADA</span>}
+        </div>
+      )}
+      {rec.why.length > 0 && (
+        <p className="line-clamp-2 text-[11px] leading-snug text-ink-2" title={rec.why.join("\n")}>
+          {rec.why[0]}
+        </p>
+      )}
+      {rec.status !== "RECOMMENDED" && rec.why_not.length > 0 && (
+        <p className="line-clamp-2 text-[11px] leading-snug text-warning" title={rec.why_not.join("\n")}>
+          {rec.why_not[0]}
+        </p>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <StatusChip status={rec.status} />
-          <span className="text-[11px] text-ink-2">
+          <span className="text-[11px] text-ink-2" title="Opportunity Score V2 (0–100): pesos configuráveis em Configurações">
             Score <b className="tabular-nums">{Math.round(rec.opportunity_score)}</b>
           </span>
         </div>
