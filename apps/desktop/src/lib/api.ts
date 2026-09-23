@@ -148,8 +148,8 @@ export const api = {
   startReplay: (body: { international?: boolean; start?: string; window_days?: number; scheme?: "expanding" | "rolling" }) =>
     request<{ ok: boolean; started?: boolean; skipped?: boolean; correlation_id?: string }>("/validation/replay", { method: "POST", body: JSON.stringify(body) }),
   decayLatest: () => request<DecayLatestResponse>("/validation/decay/latest"),
-  shadow: () => request<ShadowReport>("/validation/shadow"),
-  drift: () => request<DriftReport>("/validation/drift"),
+  shadow: (live = true) => request<ShadowReport>(`/validation/shadow${qs({ live })}`),
+  drift: (live = false) => request<DriftReport>(`/validation/drift${qs({ live })}`),
   coverage: () => request<CoverageResponse>("/validation/coverage"),
   governance: () => request<GovernanceResponse>("/validation/governance"),
 };

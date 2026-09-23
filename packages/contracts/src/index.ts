@@ -1178,11 +1178,9 @@ export interface DecayLatestResponse {
   created_at: string | null;
   detail: {
     datasets: string[];
-    matches: number;
-    windows: number;
     window_days: number;
-    candidates: Record<string, { half_life_days: number | null; brier: number; log_loss: number; n: number }>;
-    ranking: [string, number][];
+    candidates: Record<string, { half_life_days: number | null; brier: number; n: number; windows: number }>;
+    ranking: string[];
     best: string;
     recommended: string;
     recommended_half_life_days: number | null;

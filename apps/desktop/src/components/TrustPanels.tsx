@@ -463,12 +463,19 @@ function PriceTargetBlock({ r }: { r: Recommendation }) {
 export function ClustersPanel({ a }: { a: MatchAnalysis }) {
   const clusters = a.clusters ?? [];
   const actionable = clusters.filter((c) => c.state === "VALUE" || c.state === "VALUE_CANDIDATE");
-  const byKey = new Map<string, Recommendation>(a.recommendations.map((r) => [`${r.market_key}|${r.selection_key}|${r.line}`, r]));
+  // chaves vêm do engine no formato Python (`None`, `2.5`, `1.0`) — normalizamos aqui
+  const pyKey = (r: Recommendation) => `${r.market_key}|${r.selection_key}|${r.line === null ? "None" : Number.isInteger(r.line) ? r.line.toFixed(1) : String(r.line)}`;
+  const byKey = new Map<string, Recommendation>(a.recommendations.map((r) => [pyKey(r), r]));
   const name = (k: string | null) => {
     if (!k) return "—";
     const r = byKey.get(k);
-    return r ? `${r.market_label}: ${r.selection_name}${r.line !== null && !r.selection_name.includes(String(r.line)) ? ` ${r.line}` : ""} @ ${odd(r.odd)}` : k;
+    return r ? `${r.market_label}: ${r.selection_name}${r.line !== null && !r.selection_name.includes(String(r.line)) ? ` ${r.line}` : ""} @ ${odd(r.odd)}` : k.replace(/\|/g, " · ");
   };
+  const rank: Record<string, number> = { VALUE: 0, VALUE_CANDIDATE: 1, OBSERVATION: 2, MODEL_ONLY: 3 };
+  const visible = clusters
+    .filter((c) => c.state && c.state in rank)
+    .sort((x, y) => (rank[x.state as string] ?? 9) - (rank[y.state as string] ?? 9) || y.alternatives.length - x.alternatives.length)
+    .slice(0, 8);
   if (clusters.length === 0) return null;
   return (
     <div>
@@ -478,10 +485,11 @@ export function ClustersPanel({ a }: { a: MatchAnalysis }) {
           {actionable.length} tese(s) acionável(is) de {clusters.length} · {a.exposure?.note}
         </span>
       </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        {clusters
-          .filter((c) => c.state && c.state !== "NO_BET" && c.state !== "MARKET_OBSERVED")
-          .map((c) => (
+      {visible.length === 0 ? (
+        <div className="text-xs text-ink-3">Nenhuma tese com edge ou probabilidade relevante neste jogo.</div>
+      ) : (
+        <div className="grid gap-2 md:grid-cols-2">
+          {visible.map((c) => (
             <div key={c.cluster_id} className={clsx("rounded-lg border p-3 text-xs", actionable.includes(c) ? "border-primary/40" : "border-line")}>
               <div className="flex items-center justify-between gap-2">
                 <span className="font-semibold">{c.label}</span>
@@ -494,12 +502,15 @@ export function ClustersPanel({ a }: { a: MatchAnalysis }) {
               {c.alternatives.length > 0 && (
                 <div className="mt-0.5 text-ink-2">
                   <span className="text-ink-3">Alternativas (mesma tese, não somam): </span>
-                  {c.alternatives.map(name).join(" · ")}
+                  {c.alternatives.slice(0, 5).map(name).join(" · ")}
+                  {c.alternatives.length > 5 ? ` · +${c.alternatives.length - 5}` : ""}
                 </div>
               )}
             </div>
           ))}
-      </div>
+        </div>
+      )}
+      {visible.length < clusters.filter((c) => c.state && c.state in rank).length && <div className="mt-1 text-[11px] text-ink-3">Mostrando {visible.length} teses; as demais estão na tabela de mercados.</div>}
       {a.exposure && a.exposure.correlated_pairs.length > 0 && (
         <div className="mt-2 text-[11px] text-warning">Teses correlacionadas entre si: {a.exposure.correlated_pairs.map((p) => p.join(" ↔ ")).join(" · ")} — não são independentes.</div>
       )}

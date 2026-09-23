@@ -340,7 +340,7 @@ function ModelsTab() {
         <Card>
           <span className="label">Papéis</span>
           <ul className="mt-1 space-y-0.5 text-xs">
-            {g.roles.map((x) => (
+            {g.roles.filter((x) => x.role).map((x) => (
               <li key={x.model_id} className="flex justify-between">
                 <span className="font-mono">{x.model_id} <span className="text-ink-3">{x.version}</span></span>
                 <span className={clsx("chip", x.role === "champion" ? "bg-primary-50 text-primary" : x.role === "challenger" ? "bg-info-50 text-info" : "bg-gray-100 text-ink-2")}>{x.role ?? "—"}</span>
@@ -352,7 +352,7 @@ function ModelsTab() {
           <span className="label">Decay temporal (strength-v2)</span>
           <div className="mt-1 text-lg font-bold">meia-vida {decay.data?.current_half_life_days ?? "—"} d</div>
           <div className="text-xs text-ink-2">
-            {dd ? `Escolhida por walk-forward: ${dd.recommended_half_life_days ?? "sem decay"} d (N ${int(dd.matches)}, ${dd.windows} janelas)${dd.tie_with_runner_up ? " — empate técnico com o 2º colocado" : ""}.` : "Nenhuma seleção de decay registrada."}
+            {dd ? `Escolhida por walk-forward: ${dd.recommended_half_life_days ?? "sem decay"} d (N ${int(dd.candidates[dd.best]?.n)}, ${dd.candidates[dd.best]?.windows ?? "—"} janelas)${dd.tie_with_runner_up ? " — empate técnico com o 2º colocado (escolhido o mais simples)" : ""}.` : "Nenhuma seleção de decay registrada."}
           </div>
         </Card>
       </div>
@@ -424,19 +424,20 @@ function ModelsTab() {
               <tr>
                 <th className="py-1.5">Meia-vida</th>
                 <th className="text-right">Brier</th>
-                <th className="text-right">LogLoss</th>
-                <th>vs melhor</th>
+                <th className="text-right">N · janelas</th>
+                <th>vs melhor (ΔBrier, IC 95%)</th>
               </tr>
             </thead>
             <tbody>
-              {dd.ranking.map(([k]) => {
+              {dd.ranking.map((k) => {
                 const c = dd.candidates[k];
                 const vb = dd.best_vs_others_delta_brier?.[k];
+                if (!c) return null;
                 return (
                   <tr key={k} className={clsx("border-t border-line/70", k === dd.best && "font-semibold")}>
                     <td className="py-1.5">{c.half_life_days === null ? "sem decay" : `${c.half_life_days} d`}</td>
                     <td className="text-right tabular-nums">{num(c.brier, 5)}</td>
-                    <td className="text-right tabular-nums">{num(c.log_loss, 5)}</td>
+                    <td className="text-right tabular-nums">{int(c.n)} · {c.windows}</td>
                     <td>{vb ? <IntervalText v={vb} signed /> : k === dd.best ? <span className="chip bg-success-50 text-success">melhor</span> : "—"}</td>
                   </tr>
                 );
@@ -520,7 +521,7 @@ function CoverageTab() {
 // ---------------------------------------------------------------- Shadow
 
 function ShadowTab() {
-  const q = useQuery({ queryKey: ["shadow"], queryFn: api.shadow });
+  const q = useQuery({ queryKey: ["shadow"], queryFn: () => api.shadow() });
   if (q.isLoading) return <Loading />;
   if (q.isError) return <ErrorBox error={q.error} retry={() => q.refetch()} />;
   const d = q.data!;
@@ -614,12 +615,12 @@ function ShadowPerfBlock({ title, p }: { title: string; p: ShadowPerf }) {
 // ---------------------------------------------------------------- Drift
 
 function DriftTab() {
-  const q = useQuery({ queryKey: ["drift"], queryFn: api.drift });
+  const q = useQuery({ queryKey: ["drift"], queryFn: () => api.drift() });
   if (q.isLoading) return <Loading />;
   if (q.isError) return <ErrorBox error={q.error} retry={() => q.refetch()} />;
   const d = q.data!;
   const cls = d.status === "DRIFT" ? "bg-danger-50 text-danger" : d.status === "WATCH" ? "bg-warning-50 text-warning" : d.status === "STABLE" ? "bg-success-50 text-success" : "bg-gray-100 text-ink-2";
-  const keys = Object.keys(d.recent).filter((k) => k !== "n");
+  const keys = Object.keys(d.recent).filter((k) => k !== "n" && (d.recent[k] === null || typeof d.recent[k] === "number"));
   return (
     <div className="space-y-4">
       <Card className="flex items-start gap-3">
