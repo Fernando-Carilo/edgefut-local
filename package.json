@@ -1,0 +1,20 @@
+{
+  "name": "edgefut-local",
+  "private": true,
+  "version": "0.1.0",
+  "description": "EdgeFut AI — assistente local de análise quantitativa de futebol (Windows desktop)",
+  "packageManager": "pnpm@10.33.3",
+  "scripts": {
+    "dev": "pnpm --filter @edgefut/desktop dev",
+    "build": "pnpm --filter @edgefut/desktop build",
+    "tauri": "pnpm --filter @edgefut/desktop tauri",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
