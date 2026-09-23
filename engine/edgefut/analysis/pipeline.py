@@ -195,11 +195,12 @@ def analyze_event(
     attempts.extend(resolved.attempts)
     store = get_store()
 
-    # ---- histórico -------------------------------------------------------
+    # ---- histórico (as_of: nunca dados posteriores ao kickoff nem ao agora) ----
+    as_of = min(datetime.utcnow(), row.kickoff_utc)
     codes = resolved.dataset_codes
-    home_df = store.team_matches(resolved.home.canonical, resolved.home_datasets, limit=40) if resolved.home.canonical else pd.DataFrame()
-    away_df = store.team_matches(resolved.away.canonical, resolved.away_datasets, limit=40) if resolved.away.canonical else pd.DataFrame()
-    comp_df = store.competition_matches(codes) if codes else pd.DataFrame()
+    home_df = store.team_matches(resolved.home.canonical, resolved.home_datasets, before=as_of, limit=40) if resolved.home.canonical else pd.DataFrame()
+    away_df = store.team_matches(resolved.away.canonical, resolved.away_datasets, before=as_of, limit=40) if resolved.away.canonical else pd.DataFrame()
+    comp_df = store.competition_matches(codes, before=as_of) if codes else pd.DataFrame()
     if profile.is_national_teams and not comp_df.empty:
         comp_df = comp_df[comp_df["date"] >= pd.Timestamp(datetime.utcnow() - timedelta(days=3 * 365))]
     la = league_averages(comp_df)
@@ -231,7 +232,7 @@ def analyze_event(
     # ---- ELO -----------------------------------------------------------------
     elo_key = ("elo", tuple(codes), len(comp_df))
     if codes and not comp_df.empty:
-        elo_df = store.competition_matches(codes, since=datetime(2000, 1, 1)) if profile.is_national_teams else comp_df
+        elo_df = store.competition_matches(codes, since=datetime(2000, 1, 1), before=as_of) if profile.is_national_teams else comp_df
         table = elo_cache.get(elo_key, lambda: fit_elo(elo_df, profile.is_national_teams))
     else:
         table = fit_elo(pd.DataFrame(), False)
@@ -252,7 +253,7 @@ def analyze_event(
     # ---- H2H --------------------------------------------------------------------
     h2h = None
     if resolved.home.canonical and resolved.away.canonical and codes:
-        h2h_df = store.h2h(resolved.home.canonical, resolved.away.canonical, codes, limit=10)
+        h2h_df = store.h2h(resolved.home.canonical, resolved.away.canonical, codes, limit=10, before=as_of)
         h2h = summarize_h2h(h2h_df, resolved.home.canonical, resolved.away.canonical, str(h2h_df["source"].iloc[0]) if not h2h_df.empty else "historical", str(h2h_df["source_url"].iloc[0]) if not h2h_df.empty else None)
 
     # ---- modelos de gols ---------------------------------------------------------

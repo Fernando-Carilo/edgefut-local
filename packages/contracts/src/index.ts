@@ -608,8 +608,22 @@ export interface BacktestRequest {
   since?: string | null;
   until?: string | null;
   refit_every_days: number;
-  use_closing_odds: boolean;
+  scheme: "expanding" | "rolling";
+  train_window_days?: number | null;
+  closing_for_clv: boolean;
   stake: number;
+}
+
+export interface BacktestWindow {
+  train_start: string | null;
+  train_end: string | null;
+  test_start: string;
+  test_end: string;
+  n_train: number;
+  n_test: number;
+  evaluated: number;
+  fitted: boolean;
+  metrics: BacktestMetrics;
 }
 
 export interface BacktestMetrics {
@@ -638,6 +652,9 @@ export interface BacktestResponse {
   by_selection: Record<string, BacktestMetrics>;
   calibration_bins: { bin: string; predicted: number; observed: number; n: number }[];
   note: string | null;
+  windows: BacktestWindow[];
+  leakage_checks: number;
+  decision_odds: string;
   equity_curve: number[];
 }
 

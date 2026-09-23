@@ -115,19 +115,20 @@ class HistoricalStore:
             dataset_codes + [since, before],
         )
 
-    def h2h(self, team_a: str, team_b: str, dataset_codes: list[str], limit: int = 10) -> pd.DataFrame:
+    def h2h(self, team_a: str, team_b: str, dataset_codes: list[str], limit: int = 10, before: datetime | None = None) -> pd.DataFrame:
         if not dataset_codes:
             return pd.DataFrame()
         ph = ",".join("?" * len(dataset_codes))
+        before = before or datetime.utcnow()
         return self._query(
             f"""
             SELECT * FROM {{{{matches}}}}
             WHERE dataset_code IN ({ph})
               AND ((home = ? AND away = ?) OR (home = ? AND away = ?))
-              AND hg IS NOT NULL
+              AND hg IS NOT NULL AND date < ?
             ORDER BY date DESC LIMIT ?
             """,
-            dataset_codes + [team_a, team_b, team_b, team_a, limit],
+            dataset_codes + [team_a, team_b, team_b, team_a, before, limit],
         )
 
     def find_result(
