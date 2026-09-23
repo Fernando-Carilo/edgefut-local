@@ -45,7 +45,7 @@ def _opp_inputs(**kw) -> OpportunityInputs:
 def test_opportunity_v2_is_bounded_has_all_components_and_is_monotonic():
     hi = compute_opportunity(_opp_inputs())
     lo = compute_opportunity(_opp_inputs(confidence_score=40, data_quality=30, edge_pp=0, ev_pct=0, odds_freshness="STALE", odds_age_seconds=7200, model_disagreement_pp=9, sample_size=8, calibration_quality=None, calibration_reliable=False, historical_roi=None, historical_n=0))
-    assert hi.model_version == "opportunity-v2"
+    assert hi.model_version == "opportunity-v3"
     assert 0 <= lo.score < hi.score <= 100
     assert {c.key for c in hi.components} == set(COMPONENT_LABELS)
     assert abs(sum(c.weight for c in hi.components) - 100) < 0.5
@@ -136,7 +136,7 @@ def _evaluate(**overrides):
         markets=[_market_1x2(2.4)], sim=_sim(), corners=_empty_count(), cards=_empty_count(), confidence=_conf(85),
         data_quality=_dq(90), supported=True, teams_resolved=True, min_sample=40, model_disagreement_pp=2.0,
         unreliable_source=False, odds_freshness="FRESH", odds_age_seconds=90, provider_status="HEALTHY", n_models=3,
-        model_source="consenso de 3 modelos (teste)",
+        model_source="consenso de 3 modelos (teste)", evidence="BACKTEST_ODDS",
     )
     kwargs.update(overrides)
     return evaluate(**kwargs)
@@ -150,8 +150,12 @@ def test_recommends_when_edge_exists():
     assert home.edge_pp > 3
     assert home.confidence_grade == "A"
     assert home.quality_gate is not None and home.quality_gate.passed
-    assert home.opportunity is not None and home.opportunity.score == home.opportunity_score
-    assert home.label in ("VALUE", "HIGH_PROBABILITY_VALUE")
+    # Opportunity V3: breakdown (V2) + penalidade de incerteza por falta de prova OOS
+    assert home.opportunity is not None and home.opportunity.score - 5.0 == home.opportunity_score
+    assert home.opportunity_adjustments == {"uncertainty_penalty": -5.0}
+    assert home.state == "VALUE_CANDIDATE" and home.label == "VALUE_CANDIDATE"  # sem prova OOS → candidato
+    assert home.price and home.price["min_acceptable_odd"] < 2.4 and home.price["price_gap_pct"] > 0
+    assert home.cluster_id == "HOME_TEAM_POSITIVE" and home.is_primary
     assert len(home.why) >= 4 and home.why_not == []
     assert any("edge" in w for w in home.why)
     assert_no_guarantee_language(home.why)
@@ -177,7 +181,7 @@ def test_no_edge_when_market_agrees():
     recs, verdict, _ = _evaluate(markets=[_market_1x2(1.55)])
     home = next(r for r in recs if r.selection_key == "HOME")
     assert home.status != "RECOMMENDED"
-    assert "NO_EDGE" in home.reasons or verdict.reason == "NO_EDGE"
+    assert "NO_EDGE" in home.reasons or "WATCHING_PRICE" in home.reasons or verdict.reason == "NO_EDGE"
     assert home.why_not and any("Sem edge" in w for w in home.why_not)
 
 
@@ -246,3 +250,51 @@ def test_evidence_level_never_claims_more_than_the_data_supports():
         assert pipeline.evidence_level(s, FakeStore(), ["E0", "INTL"], "Copa") == "MODEL_ONLY"  # mistura: o elo mais fraco manda
         assert pipeline.evidence_level(s, FakeStore(), [], None) == "MODEL_ONLY"
     pipeline.invalidate_cache()
+
+
+def test_states_value_requires_oos_and_model_only_never_value():
+    # prova OOS suficiente e não negativa → VALUE
+    recs, verdict, _ = _evaluate(oos={"1X2": {"n": 250, "verdict": "INCONCLUSIVE", "source": "replay"}})
+    home = next(r for r in recs if r.selection_key == "HOME")
+    assert home.status == "RECOMMENDED" and home.state == "VALUE" and home.label == "VALUE" and home.oos["n"] == 250
+    # OOS negativa → OBSERVATION
+    recs, verdict, _ = _evaluate(oos={"1X2": {"n": 250, "verdict": "NEGATIVE", "roi_low": -12.0, "roi_high": -2.0}})
+    home = next(r for r in recs if r.selection_key == "HOME")
+    assert home.status == "WATCH" and home.state == "OBSERVATION" and "OOS_NEGATIVE" in home.reasons
+    # evidência MODEL_ONLY: existe preço e edge, mas a competição nunca foi validada → nunca VALUE
+    recs, verdict, _ = _evaluate(evidence="MODEL_ONLY", oos={"1X2": {"n": 999, "verdict": "POSITIVE"}})
+    home = next(r for r in recs if r.selection_key == "HOME")
+    assert home.status != "RECOMMENDED" and home.state == "MODEL_ONLY" and home.label == "MODEL_ONLY"
+    assert home.opportunity_score == 0.0 and "MODEL_ONLY" in home.reasons
+    assert home.state_text == "Probabilidade calculada, mas sem preço de mercado válido para determinar valor."
+    assert verdict.no_bet and verdict.reason == "MODEL_ONLY"
+    assert all(r.state != "VALUE" and r.label != "VALUE" for r in recs)
+    # sem edge: mercado observado; favorito do modelo vira rótulo de probabilidade, não de valor
+    recs, _, _ = _evaluate(markets=[_market_1x2(1.55)])
+    home = next(r for r in recs if r.selection_key == "HOME")
+    assert home.state in ("MARKET_OBSERVED", "OBSERVATION")
+    assert home.label in ("MODEL_FAVORITE", "WATCH", None)
+
+
+def test_clusters_pick_one_primary_per_thesis_and_penalize_alternatives():
+    from edgefut.domain.analysis import MarketOdds, SelectionOdds
+
+    dnb = MarketOdds(market_key="DRAW_NO_BET", label="DNB", line=None, margin_removed=True, overround=0.04, selections=[
+        SelectionOdds(key="HOME", name="1", price=1.6, implied=0.625, fair=0.60), SelectionOdds(key="AWAY", name="2", price=2.5, implied=0.4, fair=0.40),
+    ])
+    dc = MarketOdds(market_key="DOUBLE_CHANCE", label="DC", line=None, margin_removed=True, overround=0.04, selections=[
+        SelectionOdds(key="HOME_DRAW", name="1X", price=1.3, implied=0.769, fair=0.74), SelectionOdds(key="DRAW_AWAY", name="X2", price=2.2, implied=0.4545, fair=0.44), SelectionOdds(key="HOME_AWAY", name="12", price=1.35, implied=0.74, fair=0.71),
+    ])
+    recs, verdict, _ = _evaluate(markets=[_market_1x2(2.4), dnb, dc])
+    home_cluster = [r for r in recs if r.cluster_id == "HOME_TEAM_POSITIVE"]
+    assert len(home_cluster) == 3
+    primaries = [r for r in home_cluster if r.is_primary]
+    assert len(primaries) == 1
+    for alt in home_cluster:
+        if not alt.is_primary:
+            assert alt.primary_of is not None and any(x.startswith("ALTERNATIVE_OF:") for x in alt.reasons) if alt.status != "NO_BET" else True
+    # todas as seleções do evento anotadas com cluster; nunca duas primárias no mesmo cluster
+    by = {}
+    for r in recs:
+        by.setdefault(r.cluster_id, []).append(r.is_primary)
+    assert all(sum(v) == 1 for v in by.values())

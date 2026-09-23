@@ -17,14 +17,55 @@ from ..domain.freshness import FreshnessStatus
 from ..models.calibration import pick
 from ..providers.player import player_market_verdict
 from .confidence import grade_for
+from .correlation import apply_clusters
 from .edge import CATEGORY_BY_MARKET, WATCH_ONLY_MARKETS, edge_and_ev, model_probability
 from .gate import GateContext, quality_gate
 from .opportunity import OpportunityInputs, compute_opportunity
+from .pricing import WATCH_PRICE_TEXT, is_watching_price, price_target
 from .why import WhyContext, event_why_not, why_bet, why_not
 
 EXTREME_MOVEMENT_PCT = 15.0
 MODEL_DISAGREEMENT_PP = 10.0
 SMALL_SAMPLE_N = 10
+
+MODEL_ONLY_TEXT = "Probabilidade calculada, mas sem preço de mercado válido para determinar valor."
+STATE_TEXT = {
+    "MODEL_ONLY": MODEL_ONLY_TEXT,
+    "MARKET_OBSERVED": "Modelo e mercado concordam: sem edge relevante.",
+    "VALUE_CANDIDATE": "Passou no quality gate; falta prova out-of-sample suficiente neste mercado.",
+    "VALUE": "Passou no quality gate e o mercado tem histórico out-of-sample suficiente.",
+    "OBSERVATION": "Edge existe, mas ficou em observação.",
+    "NO_BET": "Sem entrada.",
+}
+
+
+def state_label(state: str | None, model_prob: float) -> str | None:
+    """Rótulo derivado do estado. MODEL_FAVORITE fala de probabilidade, nunca de valor."""
+    if state == "VALUE":
+        return "VALUE"
+    if state == "VALUE_CANDIDATE":
+        return "VALUE_CANDIDATE"
+    if state == "MODEL_ONLY":
+        return "MODEL_ONLY"
+    if state == "OBSERVATION":
+        return "WATCH"
+    if state in ("MARKET_OBSERVED", "NO_BET") and model_prob >= settings.high_probability_min:
+        return "MODEL_FAVORITE"
+    return None
+
+
+def oos_check(market_key: str, oos: dict[str, dict] | None) -> tuple[str, dict]:
+    """CALIBRATION / OOS CHECK: o mercado tem prova out-of-sample suficiente?
+
+    `oos[market_key]` vem do último replay (apostas simuladas do campeão, gate simplificado) e/ou
+    das apostas reais liquidadas: {"n": int, "roi_low": float|None, "verdict": str}.
+    Retorna ("PASS" | "INSUFFICIENT" | "NEGATIVE", detalhe)."""
+    row = (oos or {}).get(market_key)
+    if not row or int(row.get("n") or 0) < settings.value_min_oos_bets:
+        return "INSUFFICIENT", {"n": int((row or {}).get("n") or 0), "min": settings.value_min_oos_bets, "source": (row or {}).get("source")}
+    if row.get("verdict") == "NEGATIVE":
+        return "NEGATIVE", {"n": int(row["n"]), "roi_low": row.get("roi_low"), "roi_high": row.get("roi_high"), "source": row.get("source")}
+    return "PASS", {"n": int(row["n"]), "verdict": row.get("verdict"), "source": row.get("source")}
 
 
 def opportunity_label(model_prob: float, edge_pp: float, ev_pct: float) -> str | None:
@@ -92,8 +133,13 @@ def evaluate(
     model_source: str = "modelo de gols",
     historical: dict[str, dict] | None = None,  # market_key → {"roi": %, "n": int}
     evidence: str = "MODEL_ONLY",
+    oos: dict[str, dict] | None = None,  # market_key → prova out-of-sample (replay/settled)
 ) -> tuple[list[Recommendation], NoBetVerdict, list[str]]:
-    """Retorna (recomendações, veredito do evento, WHY NOT do evento)."""
+    """Retorna (recomendações, veredito do evento, WHY NOT do evento).
+
+    Estados (iteração 3): RECOMMENDED só existe como status quando o estado é VALUE ou
+    VALUE_CANDIDATE. Com evidência MODEL_ONLY (competição sem odds históricas para validar o
+    modelo contra o mercado) nenhuma seleção passa de MODEL_ONLY — nunca VALUE, nunca ROI."""
     event_block = _event_no_bet(
         supported=supported, teams_resolved=teams_resolved, min_sample=min_sample, sim=sim,
         model_disagreement_pp=model_disagreement_pp, confidence=confidence, unreliable_source=unreliable_source,
@@ -192,6 +238,36 @@ def evaluate(
                 if not gate.passed:
                     status, reasons = "WATCH", ["QUALITY_GATE", *reasons]
 
+            # ---- estado (§22) --------------------------------------------------------------
+            price_ok = sel.price is not None and sel.price > 1.0
+            price = price_target(mp, sel.price if price_ok else None, (1.0 + market.overround) if market.overround is not None else None, market_prob if price_ok else None)
+            oos_row: dict | None = None
+            if not price_ok:
+                state = "MODEL_ONLY"
+                if status == "RECOMMENDED":
+                    status, reasons = "WATCH", ["MODEL_ONLY", *reasons]
+            elif evidence == "MODEL_ONLY" and status in ("RECOMMENDED", "WATCH") and "NO_EDGE" not in reasons:
+                # há preço, mas a competição nunca foi validada contra odds → não se fala em valor
+                state = "MODEL_ONLY"
+                status, reasons = "WATCH", ["MODEL_ONLY", *[r for r in reasons if r != "QUALITY_GATE"]]
+            elif status == "RECOMMENDED":
+                verdict, oos_row = oos_check(market.market_key, oos)
+                if verdict == "PASS":
+                    state = "VALUE"
+                elif verdict == "NEGATIVE":
+                    state, status, reasons = "OBSERVATION", "WATCH", ["OOS_NEGATIVE", *reasons]
+                else:
+                    state = "VALUE_CANDIDATE"
+            elif status == "WATCH":
+                state = "OBSERVATION"
+            elif "NO_EDGE" in reasons and event_block is None:
+                state = "MARKET_OBSERVED"
+                if is_watching_price(mp, sel.price, price.get("price_gap_pct")):
+                    state, status, reasons = "OBSERVATION", "WATCH", ["WATCHING_PRICE", *[r for r in reasons if r != "NO_EDGE"]]
+            else:
+                state = "NO_BET"
+            state_text = WATCH_PRICE_TEXT if "WATCHING_PRICE" in reasons else STATE_TEXT[state]
+
             rec = Recommendation(
                 market_key=market.market_key, market_label=market.label, selection_key=sel.key,
                 selection_name=sel.name, line=market.line, odd=sel.price, model_prob=round(mp, 4),
@@ -200,13 +276,22 @@ def evaluate(
                 market_prob=round(market_prob, 4), market_prob_is_fair=sel.fair is not None,
                 edge_pp=edge_pp, ev_pct=ev_pct, confidence_score=round(conf_score, 1), confidence_grade=grade,
                 opportunity_score=opp.score, status=status, reasons=reasons, category=category,  # type: ignore[arg-type]
-                label=opportunity_label(mp, edge_pp, ev_pct), opportunity=opp, quality_gate=gate,  # type: ignore[arg-type]
+                label=state_label(state, mp), opportunity=opp, quality_gate=gate,  # type: ignore[arg-type]
                 evidence=evidence,  # type: ignore[arg-type]
+                state=state, state_text=state_text, price=price, oos=oos_row,  # type: ignore[arg-type]
             )
+            if state == "MODEL_ONLY":
+                rec.opportunity_adjustments = {"model_only": -rec.opportunity_score}
+                rec.opportunity_score = 0.0  # sem preço/validação não existe "oportunidade" a pontuar
+            elif oos_row is not None and state == "VALUE_CANDIDATE":
+                rec.opportunity_adjustments = {"uncertainty_penalty": -5.0}
+                rec.opportunity_score = round(max(0.0, rec.opportunity_score - 5.0), 1)
             rec.why = why_bet(rec, why_ctx) if status in ("RECOMMENDED", "WATCH") else []
             rec.why_not = why_not(rec, why_ctx, gate) if status != "RECOMMENDED" else []
             recs.append(rec)
 
+    # ---- correlation gate: uma primária por tese; alternativas penalizadas ----------------
+    apply_clusters(recs)
     recs.sort(key=lambda r: (-(r.status == "RECOMMENDED"), -(r.status == "WATCH"), -r.opportunity_score))
 
     if event_block is not None:
@@ -215,7 +300,10 @@ def evaluate(
         return recs, NoBetVerdict(no_bet=False), []
     if any(r.status == "WATCH" for r in recs):
         gated = [r for r in recs if r.status == "WATCH" and "QUALITY_GATE" in r.reasons]
-        if gated:
+        model_only = [r for r in recs if r.state == "MODEL_ONLY" and "MODEL_ONLY" in r.reasons]
+        if model_only and not gated:
+            v = NoBetVerdict(no_bet=True, reason="MODEL_ONLY", detail=f"{len(model_only)} seleção(ões) com probabilidade calculada, mas sem validação modelo × mercado nesta competição. {MODEL_ONLY_TEXT}")
+        elif gated:
             failed = sorted({k for r in gated for k in (r.quality_gate.failed if r.quality_gate else [])})
             v = NoBetVerdict(no_bet=True, reason="QUALITY_GATE", detail=f"{len(gated)} seleção(ões) com edge, mas reprovadas no quality gate: {', '.join(failed)}.")
         else:
@@ -225,5 +313,5 @@ def evaluate(
     return recs, v, event_why_not(v, why_ctx)
 
 
-__all__ = ["evaluate", "opportunity_label", "versions"]
+__all__ = ["evaluate", "opportunity_label", "state_label", "oos_check", "MODEL_ONLY_TEXT", "STATE_TEXT", "versions"]
 

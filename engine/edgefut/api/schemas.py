@@ -61,11 +61,18 @@ class RadarItem(BaseModel):
     confidence_grade: str
     data_quality: float
     no_bet_reason: NoBetReason | None = None
-    label: str | None = None  # HIGH_PROBABILITY | VALUE | HIGH_PROBABILITY_VALUE
+    label: str | None = None  # MODEL_FAVORITE | MODEL_ONLY | WATCH | VALUE_CANDIDATE | VALUE | NO_BET
     quality_gate_passed: bool = False
     freshness_status: str | None = None
     evidence: str | None = None  # SETTLED | BACKTEST_ODDS | MODEL_ONLY
     why: list[str] = Field(default_factory=list)  # 2 primeiras razões (WHY / WHY NOT)
+    # Iteração 3
+    state: str | None = None  # estado da seleção primária mostrada
+    cluster_id: str | None = None  # tese da seleção primária
+    cluster_label: str | None = None
+    alternatives: int = 0  # seleções alternativas da mesma tese (não contam como oportunidade)
+    exposure: str | None = None  # LOW | MEDIUM | HIGH (evento)
+    actionable_clusters: int = 0  # teses acionáveis no evento
 
 
 class RadarCard(BaseModel):
@@ -93,6 +100,13 @@ class RadarSummary(BaseModel):
     alerts_unread: int = 0
     no_bet_by_reason: dict[str, int] = Field(default_factory=dict)
     gate_passed_by_evidence: dict[str, int] = Field(default_factory=dict)  # SETTLED / BACKTEST_ODDS / MODEL_ONLY
+    # Iteração 3 — eventos pelo estado da melhor primária + clusters (oportunidades sem duplicidade)
+    events_by_state: dict[str, int] = Field(default_factory=dict)  # MODEL_ONLY / MARKET_OBSERVED / VALUE_CANDIDATE / VALUE / OBSERVATION / NO_BET
+    value_candidates: int = 0
+    model_only: int = 0
+    actionable_clusters: int = 0  # soma de teses acionáveis (primárias VALUE/VALUE_CANDIDATE) — "oportunidades reais"
+    selections_actionable: int = 0  # seleções RECOMMENDED (inclui alternativas) — para mostrar a redundância evitada
+    exposure_high: int = 0  # eventos com exposição HIGH
 
 
 class RadarResponse(BaseModel):
@@ -134,6 +148,12 @@ class DashboardResponse(BaseModel):
     no_bet: int = 0
     alerts_unread: int = 0
     health_overall: str | None = None
+    # Iteração 3 — MODEL HEALTH (discreto)
+    model_health: dict | None = None  # champion, last_replay (vs mercado), drift status, unsettled, shadow N
+    value: int = 0
+    value_candidates: int = 0
+    model_only: int = 0
+    actionable_clusters: int = 0
 
 
 class SimulatorRequest(BaseModel):

@@ -27,11 +27,29 @@ def _upcoming(analyses: list[MatchAnalysis], hours: int = 48) -> list[MatchAnaly
     return [a for a in analyses if now - timedelta(hours=2) < a.event.kickoff_utc < now + timedelta(hours=hours)]
 
 
-def _best(a: MatchAnalysis, category: str | None = None, statuses=("RECOMMENDED",)) -> Recommendation | None:
+def _best(a: MatchAnalysis, category: str | None = None, statuses=("RECOMMENDED",), primary_only: bool = True) -> Recommendation | None:
+    """Melhor seleção do evento — só primárias de cluster (uma por tese); alternativas nunca lideram."""
     for r in a.recommendations:
-        if r.status in statuses and (category is None or r.category == category):
+        if r.status in statuses and (category is None or r.category == category) and (r.is_primary or not primary_only):
             return r
     return None
+
+
+def _best_state(a: MatchAnalysis, states: tuple[str, ...]) -> Recommendation | None:
+    for r in a.recommendations:
+        if r.is_primary and r.state in states and r.market_key != "PLAYER_TO_SCORE":
+            return r
+    return None
+
+
+def _event_state(a: MatchAnalysis) -> str:
+    """Estado do evento = melhor estado entre as primárias (ordem VALUE > VALUE_CANDIDATE > OBSERVATION > MODEL_ONLY > MARKET_OBSERVED > NO_BET)."""
+    if a.no_bet.no_bet and a.no_bet.reason in DATA_NO_BET | {"LOW_CONFIDENCE", "MODEL_DISAGREEMENT"}:
+        return "NO_BET"
+    for st in ("VALUE", "VALUE_CANDIDATE", "OBSERVATION", "MODEL_ONLY", "MARKET_OBSERVED"):
+        if _best_state(a, (st,)):
+            return st
+    return "NO_BET"
 
 
 def _item(a: MatchAnalysis, rec: Recommendation | None) -> RadarItem:
@@ -39,12 +57,16 @@ def _item(a: MatchAnalysis, rec: Recommendation | None) -> RadarItem:
         why = (rec.why if rec.status == "RECOMMENDED" else rec.why_not)[:2]
     else:
         why = a.why_not[:2]
+    cluster = next((c for c in a.clusters if rec and c.get("cluster_id") == rec.cluster_id), None) if rec else None
     return RadarItem(
         event=a.event, recommendation=rec, opportunity_score=rec.opportunity_score if rec else a.opportunity_score,
         confidence_grade=rec.confidence_grade if rec else a.confidence.grade, data_quality=a.data_quality.score,
         no_bet_reason=a.no_bet.reason, label=rec.label if rec else None,
         quality_gate_passed=bool(rec and rec.quality_gate and rec.quality_gate.passed),
         freshness_status=a.freshness_status, evidence=a.evidence, why=why,
+        state=rec.state if rec else _event_state(a), cluster_id=rec.cluster_id if rec else None,
+        cluster_label=cluster.get("label") if cluster else None, alternatives=len(cluster.get("alternatives") or []) if cluster else 0,
+        exposure=(a.exposure or {}).get("level"), actionable_clusters=len((a.exposure or {}).get("actionable_clusters") or []),
     )
 
 
@@ -76,10 +98,26 @@ def summarize(session: Session, analyses: list[MatchAnalysis], hours: int) -> Ra
     st = jobs.state()
     gate = sum(1 for a in analyses if a.quality_gate_passed)
     a_count = b_count = high = value = watch = no_bet = stale = 0
+    candidates = model_only_n = clusters_n = sel_n = exp_high = 0
     reasons: Counter[str] = Counter()
     by_evidence: Counter[str] = Counter()
+    by_state: Counter[str] = Counter()
     for a in analyses:
         best = _best(a)
+        est = _event_state(a)
+        by_state[est] += 1
+        if est == "VALUE":
+            value += 1
+        elif est == "VALUE_CANDIDATE":
+            candidates += 1
+        elif est == "MODEL_ONLY":
+            model_only_n += 1
+        if any(r.is_primary and r.label == "MODEL_FAVORITE" for r in a.recommendations):
+            high += 1
+        clusters_n += len((a.exposure or {}).get("actionable_clusters") or [])
+        sel_n += sum(1 for r in a.recommendations if r.status == "RECOMMENDED")
+        if (a.exposure or {}).get("level") == "HIGH":
+            exp_high += 1
         if best and a.quality_gate_passed:
             by_evidence[a.evidence or "MODEL_ONLY"] += 1
         if best:
@@ -87,10 +125,6 @@ def summarize(session: Session, analyses: list[MatchAnalysis], hours: int) -> Ra
                 a_count += 1
             elif best.confidence_grade == "B":
                 b_count += 1
-            if best.label in ("HIGH_PROBABILITY", "HIGH_PROBABILITY_VALUE"):
-                high += 1
-            if best.label in ("VALUE", "HIGH_PROBABILITY_VALUE"):
-                value += 1
         elif _best(a, statuses=("WATCH",)):
             watch += 1
         elif a.no_bet.no_bet:
@@ -104,7 +138,8 @@ def summarize(session: Session, analyses: list[MatchAnalysis], hours: int) -> Ra
         with_sufficient_data=sum(1 for a in analyses if a.no_bet.reason not in DATA_NO_BET), analyzed=len(analyses),
         quality_gate_passed=gate, confidence_a=a_count, confidence_b=b_count, high_probability=high, value=value,
         watch=watch, no_bet=no_bet, stale=stale, alerts_unread=_alerts_unread(session), no_bet_by_reason=dict(reasons),
-        gate_passed_by_evidence=dict(by_evidence),
+        gate_passed_by_evidence=dict(by_evidence), events_by_state=dict(by_state), value_candidates=candidates, model_only=model_only_n,
+        actionable_clusters=clusters_n, selections_actionable=sel_n, exposure_high=exp_high,
     )
 
 
@@ -133,20 +168,23 @@ def radar(hours: int = Query(48, le=168), session: Session = Depends(get_session
         return r if r and r.quality_gate and r.quality_gate.passed else None
 
     # TOP: só quem passou no quality gate (RECOMMENDED já implica isso; a checagem é explícita).
+    # Uma PRIMÁRIA por tese: alternativas da mesma tese (DNB, DC, handicap…) não aparecem como oportunidades extra.
     top = [_item(a, gated(a)) for a in analyses if gated(a)]
-    card("top", "TOP OPORTUNIDADES", "Passaram no quality gate · ordenadas por Opportunity Score V2", top)
-    card("high_probability", "HIGH PROBABILITY", f"Probabilidade do modelo ≥ {settings.high_probability_min:.0%} — não confundir com valor", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).label in ("HIGH_PROBABILITY", "HIGH_PROBABILITY_VALUE")])  # type: ignore[union-attr]
-    card("valor", "VALUE", f"Edge ≥ {settings.min_edge_pp:.0f} pp e EV ≥ {settings.min_ev_pct:.0f}% — o valor está na diferença modelo × mercado", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).label in ("VALUE", "HIGH_PROBABILITY_VALUE")])  # type: ignore[union-attr]
+    card("top", "TOP OPORTUNIDADES", "Uma primária por tese · passaram no quality gate · ordenadas por Opportunity Score V3", top)
+    card("valor", "VALUE", f"Edge ≥ {settings.min_edge_pp:.0f} pp, EV ≥ {settings.min_ev_pct:.0f}% e prova out-of-sample no mercado (N ≥ {settings.value_min_oos_bets})", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).state == "VALUE"])  # type: ignore[union-attr]
+    card("value_candidate", "VALUE CANDIDATE", "Passaram no quality gate, mas o mercado ainda não tem prova out-of-sample suficiente", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).state == "VALUE_CANDIDATE"])  # type: ignore[union-attr]
+    card("high_probability", "MODEL FAVORITE", f"Probabilidade do modelo ≥ {settings.high_probability_min:.0%} — fala de probabilidade, não de valor", [_item(a, r) for a in analyses for r in [next((x for x in a.recommendations if x.is_primary and x.label == "MODEL_FAVORITE"), None)] if r])
+    card("model_only", "MODEL ONLY", "Probabilidade calculada, mas sem preço de mercado válido para determinar valor — nunca VALUE, nunca ROI", [_item(a, r) for a in analyses for r in [_best_state(a, ("MODEL_ONLY",))] if r and not gated(a)])
     card("high_confidence", "ALTA CONFIANÇA", "Confiança A", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).confidence_grade == "A"])  # type: ignore[union-attr]
     for key, title, cat in (("gols", "GOLS", "GOLS"), ("escanteios", "ESCANTEIOS", "ESCANTEIOS"), ("cartoes", "CARTÕES", "CARTOES"), ("finalizacoes", "FINALIZAÇÕES", "FINALIZACOES")):
         items = [_item(a, gated(a, cat)) for a in analyses if gated(a, cat)]
         card(key, title, f"Melhor seleção de {title.lower()} por jogo (quality gate)", items)
     obs = []
     for a in analyses:
-        r = _best(a, statuses=("WATCH",))
+        r = _best_state(a, ("OBSERVATION",))
         if r and not gated(a):
             obs.append(_item(a, r))
-    card("observacao", "EM OBSERVAÇÃO", "Edge existe, mas reprovou no quality gate ou é mercado de alta variância / confiança C", obs)
+    card("observacao", "EM OBSERVAÇÃO", "Edge existe mas reprovou no gate, confiança C, prova OOS negativa ou preço curto (WATCHING PRICE)", obs)
     no_bet = [_item(a, None) for a in analyses if a.no_bet.no_bet and not _best(a, statuses=("WATCH",))]
     card("no_bet", "NO BET", "Jogos em que o sistema recomenda não entrar — cada um com o motivo", no_bet, sort_key=lambda i: i.event.kickoff_utc.timestamp())
     return RadarResponse(
@@ -194,12 +232,11 @@ def morning_summary(name: str, s: RadarSummary, health_overall: str | None) -> s
         return f"{name}, encontramos {s.events_found} jogos nas próximas 48 h e a primeira análise está rodando. Volte em alguns minutos."
     parts = [f"{name}, analisamos {s.analyzed} de {s.events_found} jogos das próximas 48 h."]
     if s.quality_gate_passed:
-        parts.append(f"{s.quality_gate_passed} passaram no quality gate ({s.confidence_a} com confiança A, {s.confidence_b} com B).")
-        model_only = s.gate_passed_by_evidence.get("MODEL_ONLY", 0)
-        if model_only:
-            parts.append(f"{model_only} deles em competições sem odds históricas (MODEL_ONLY): edge nunca verificado contra o mercado.")
+        parts.append(f"{s.quality_gate_passed} passaram no quality gate ({s.confidence_a} com confiança A, {s.confidence_b} com B): {s.value} VALUE, {s.value_candidates} VALUE CANDIDATE, {s.actionable_clusters} tese(s) acionável(is) em {s.selections_actionable} seleção(ões).")
     else:
         parts.append("Nenhum passou no quality gate hoje — isso é o sistema funcionando, não falhando.")
+    if s.model_only:
+        parts.append(f"{s.model_only} em MODEL ONLY: probabilidade calculada, mas sem validação modelo × mercado nesta competição.")
     if s.watch:
         parts.append(f"{s.watch} em observação.")
     if s.no_bet:
@@ -259,6 +296,13 @@ def dashboard(session: Session = Depends(get_session)):
     except Exception:  # noqa: BLE001 — diagnóstico é auxiliar; nunca derruba o dashboard
         health_overall = None
     name = _user_name(session)
+    model_health = None
+    try:
+        from ...validation.model_health import model_health_summary
+
+        model_health = model_health_summary(session)
+    except Exception as exc:  # noqa: BLE001 — bloco discreto; nunca derruba o dashboard
+        model_health = {"status": "UNAVAILABLE", "error": str(exc)}
     return DashboardResponse(
         greeting=greeting, user_name=name, analyzed_today=len(analyzed_today), confidence_a=summary.confidence_a,
         confidence_b=summary.confidence_b, discarded_markets=discarded, last_update=last, top_opportunities=top[:8],
@@ -266,6 +310,8 @@ def dashboard(session: Session = Depends(get_session)):
         morning_summary=morning_summary(name, summary, health_overall), events_found=summary.events_found,
         quality_gate_passed=summary.quality_gate_passed, watch=summary.watch, no_bet=summary.no_bet,
         alerts_unread=summary.alerts_unread, health_overall=health_overall,
+        model_health=model_health, value=summary.value, value_candidates=summary.value_candidates, model_only=summary.model_only,
+        actionable_clusters=summary.actionable_clusters,
     )
 
 

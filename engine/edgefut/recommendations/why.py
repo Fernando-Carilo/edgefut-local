@@ -75,6 +75,17 @@ def why_not(rec: Recommendation, ctx: WhyContext, gate: QualityGate | None) -> l
             out.append("Mercado de jogador sem fonte de escalação/minutos: Player Engine desativado.")
         elif r == "QUALITY_GATE":
             continue  # já detalhado acima
+        elif r == "WATCHING_PRICE":
+            gap = (rec.price or {}).get("price_gap_pct")
+            min_odd = (rec.price or {}).get("min_acceptable_odd")
+            out.append(f"Sem edge suficiente: {rec.edge_pp:+.1f} pp / EV {rec.ev_pct:+.1f}%. Probabilidade interessante, mas preço atual não oferece margem suficiente" + (f" — odd mínima aceitável {min_odd:.2f} ({gap:+.1f}%)." if min_odd and gap is not None else "."))
+        elif r == "MODEL_ONLY":
+            out.append("Probabilidade calculada, mas sem preço de mercado válido para determinar valor: esta competição não tem odds históricas para validar o modelo contra o mercado (evidência MODEL_ONLY). Nunca rotulamos VALUE aqui.")
+        elif r == "OOS_NEGATIVE":
+            o = rec.oos or {}
+            out.append(f"Prova out-of-sample negativa neste mercado (N={o.get('n')}, ROI IC 95% [{o.get('roi_low')}, {o.get('roi_high')}]): o edge existe no papel, mas o histórico não confirma.")
+        elif r.startswith("ALTERNATIVE_OF:"):
+            out.append(f"Alternativa da mesma tese que {r.split(':', 1)[1].replace('/', ' · ')} — não é uma oportunidade adicional.")
         elif r in ("STALE_DATA", "MODEL_DISAGREEMENT", "SMALL_SAMPLE", "LOW_DATA", "UNSUPPORTED_COMPETITION", "UNRELIABLE_SOURCE"):
             continue  # motivo do evento, detalhado em event_why_not
         else:

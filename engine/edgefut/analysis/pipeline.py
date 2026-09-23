@@ -6,6 +6,8 @@ ODD JUSTA → COMPARAÇÃO → EDGE → RISCO → RECOMENDAÇÃO/NO BET → EXPL
 
 from __future__ import annotations
 
+from collections import Counter
+
 import logging
 import threading
 from datetime import datetime, timedelta
@@ -18,7 +20,7 @@ from ..collectors import SuperbetSync, latest_odds_rows, odds_history_map
 from ..collectors.sync import IdentityAssigner
 from ..core import versions
 from ..core.config import settings
-from ..db.models import Competition, Event, Favorite, PredictionSnapshot, Setting
+from ..db.models import ShadowPrediction, Competition, Event, Favorite, PredictionSnapshot, Setting
 from ..domain.analysis import (
     CountDistribution,
     EventSummary,
@@ -57,6 +59,7 @@ from ..providers import SourceResolver
 from ..providers.historical import get_store
 from ..quality import conflicts_for_event, record_conflict
 from ..recommendations import compute_confidence, evaluate
+from ..recommendations.correlation import views_from
 from ..simulation.monte_carlo import simulate
 from ..validation.governance import current_champion
 
@@ -139,6 +142,44 @@ def historical_by_market(session: Session) -> dict[str, dict]:
         return out
 
     return _ctx("historical_by_market", load)  # type: ignore[return-value]
+
+
+def oos_by_market(session: Session) -> dict[str, dict]:
+    """Prova out-of-sample por mercado para o CALIBRATION/OOS CHECK dos estados.
+
+    Fontes, por prioridade: apostas reais liquidadas (performance_summary) quando N ≥ mínimo;
+    senão o último replay histórico (apostas simuladas do campeão, gate simplificado — só 1X2 e
+    Over/Under 2,5 têm preço histórico). Mercados sem nenhuma fonte ficam VALUE_CANDIDATE."""
+
+    def load():
+        out: dict[str, dict] = {}
+        for mk, m in historical_by_market(session).items():
+            if int(m.get("n") or 0) >= settings.value_min_oos_bets:
+                roi = m.get("roi")
+                out[mk] = {"n": int(m["n"]), "roi": roi, "verdict": "NEGATIVE" if (roi is not None and roi < 0 and m.get("status") in ("MODERATE", "STRONG")) else "INCONCLUSIVE", "source": "settled"}
+        try:
+            from sqlalchemy import select as _select
+
+            from ..db.models import ValidationRun
+
+            rows = session.execute(_select(ValidationRun).where(ValidationRun.kind == "replay").order_by(ValidationRun.created_at.desc()).limit(10)).scalars().all()
+        except Exception:  # noqa: BLE001
+            rows = []
+        for run in rows:
+            det = run.detail or {}
+            if (run.summary or {}).get("international") or not det.get("bets"):
+                continue
+            champion = det.get("champion") or "ensemble"
+            bets = det["bets"].get(champion) or det["bets"].get("ensemble") or {}
+            for rk, mk in (("1X2", "1X2"), ("OU25", "TOTAL_GOALS")):
+                bm = (bets.get("by_market") or {}).get(rk)
+                if bm and mk not in out:
+                    roi = bm.get("roi") or {}
+                    out[mk] = {"n": int(bm.get("n") or 0), "roi": roi.get("point"), "roi_low": roi.get("low"), "roi_high": roi.get("high"), "verdict": bm.get("verdict"), "source": f"replay:{champion}:{rk}", "run_id": run.id}
+            break
+        return out
+
+    return _ctx("oos_by_market", load)  # type: ignore[return-value]
 
 
 def thresholds_hash() -> str:
@@ -487,8 +528,9 @@ def analyze_event(
         odds_freshness=odds_f.status if odds_f is not None else None,
         odds_age_seconds=odds_f.age_seconds if odds_f is not None else None,
         provider_status=provider_status(session), n_models=n_models, model_source=model_source,
-        historical=historical_by_market(session), evidence=evidence,
+        historical=historical_by_market(session), evidence=evidence, oos=oos_by_market(session),
     )
+    cluster_views, exposure = views_from(recs)
     if not profile.supported and profile.reason:
         warnings.append(profile.reason)
     if resolved.home.canonical is None and profile.supported:
@@ -551,6 +593,10 @@ def analyze_event(
         quality_gate_passed=any(r.status == "RECOMMENDED" and r.quality_gate is not None and r.quality_gate.passed for r in recs),
         evidence=evidence,  # type: ignore[arg-type]
         cache_key=cache_key(session, row),
+        clusters=[v.to_dict() for v in cluster_views],
+        exposure=exposure.to_dict(),
+        states=dict(Counter(r.state or "NO_BET" for r in recs if r.market_key != "PLAYER_TO_SCORE")),
+        champion=champion,
     )
     analysis.explanation = explain(analysis)
     for r in analysis.recommendations:
@@ -675,7 +721,28 @@ def _save_snapshot(session: Session, row: Event, a: MatchAnalysis) -> int | None
     )
     session.add(snap)
     session.flush()
+    _write_shadow(session, row, a, snap.id)
     return snap.id
+
+
+def _write_shadow(session: Session, row: Event, a: MatchAnalysis, snapshot_id: int) -> int:
+    """Shadow mode: uma linha append-only por seleção avaliada (todos os estados, inclusive NO_BET
+    e MODEL_ONLY), sem interação do usuário. É a base do relatório diário e do drift."""
+    n = 0
+    for r in a.recommendations:
+        if r.market_key == "PLAYER_TO_SCORE" or r.model_prob <= 0:
+            continue
+        session.add(ShadowPrediction(
+            event_id=row.id, snapshot_id=snapshot_id, kickoff_utc=row.kickoff_utc, competition_name=row.competition_name,
+            dataset_code=a.home.dataset_code or a.away.dataset_code, market_key=r.market_key, selection_key=r.selection_key, line=r.line,
+            odd=r.odd if r.odd and r.odd > 1 else None, model_prob=r.model_prob, model_prob_raw=r.model_prob_raw, model_prob_calibrated=r.model_prob_calibrated,
+            market_prob=r.market_prob if r.odd and r.odd > 1 else None, edge_pp=r.edge_pp, ev_pct=r.ev_pct, confidence_score=r.confidence_score,
+            opportunity_score=r.opportunity_score, data_quality=a.data_quality.score, state=r.state or "NO_BET", evidence=r.evidence,
+            cluster_id=r.cluster_id, is_primary=bool(r.is_primary), model_version=versions.PIPELINE,
+            model_versions={"champion": a.champion, **{k: v for k, v in versions.ALL_MODELS.items() if k in ("ensemble", "poisson_v2", "calibration")}},
+        ))
+        n += 1
+    return n
 
 
 def market_calibration(session: Session) -> tuple[dict[str, float], int]:

@@ -23,6 +23,7 @@ NoBetReason = Literal[
     "SMALL_SAMPLE",
     "LINEUP_UNCERTAINTY",
     "EXTREME_ODDS_MOVEMENT",
+    "MODEL_ONLY",
     "UNSUPPORTED_COMPETITION",
     "STALE_DATA",
     "QUALITY_GATE",
@@ -294,7 +295,19 @@ class QualityGate(BaseModel):
     failed: list[str] = Field(default_factory=list)  # keys que falharam
 
 
-OpportunityLabel = Literal["HIGH_PROBABILITY", "VALUE", "HIGH_PROBABILITY_VALUE"]
+# Iteração 3 — rótulos derivados do ESTADO (nunca "SAFE BET", "GUARANTEED", "CERTAIN", "MUST BET"):
+#   MODEL_FAVORITE  — o modelo favorece esta seleção (p ≥ high_probability_min) sem valor no preço
+#   MODEL_ONLY      — probabilidade calculada, sem preço/validação de mercado para avaliar valor
+#   WATCH           — edge existe mas está em observação (gate, confiança C, preço curto)
+#   VALUE_CANDIDATE — passou no gate, falta prova out-of-sample no mercado
+#   VALUE           — passou no gate E há prova OOS suficiente no mercado
+#   NO_BET
+OpportunityLabel = Literal["HIGH_PROBABILITY", "VALUE", "HIGH_PROBABILITY_VALUE", "MODEL_FAVORITE", "MODEL_ONLY", "WATCH", "VALUE_CANDIDATE", "NO_BET"]
+
+# Estado da seleção no pipeline de decisão (iteração 3, §22):
+#   MODEL OUTPUT → DATA VALIDATION → MARKET AVAILABLE? (não → MODEL_ONLY) → FAIR PRICE → EDGE → EV
+#   → QUALITY GATE → CORRELATION GATE → CALIBRATION/OOS CHECK → VALUE | OBSERVATION | NO_BET
+RecommendationState = Literal["MODEL_ONLY", "MARKET_OBSERVED", "VALUE_CANDIDATE", "VALUE", "OBSERVATION", "NO_BET"]
 
 # Nível de evidência de que o modelo bate o MERCADO nesta competição:
 #   SETTLED       — apostas reais liquidadas (N>=30) com ROI/CLV medidos
@@ -344,6 +357,15 @@ class Recommendation(BaseModel):
     why: list[str] = Field(default_factory=list)  # WHY THIS BET — fatos, sem linguagem de garantia
     why_not: list[str] = Field(default_factory=list)  # WHY NOT — por que não entrou/ficou em observação
     evidence: EvidenceLevel | None = None
+    # Iteração 3 — estados, clusters, preço-alvo
+    state: RecommendationState | None = None
+    state_text: str | None = None  # frase para a UI (ex.: MODEL_ONLY / WATCHING PRICE)
+    cluster_id: str | None = None  # opportunity_cluster_id (tese)
+    is_primary: bool = True  # primária do cluster (as alternativas são a mesma tese)
+    primary_of: str | None = None  # "market|selection|line" da primária, quando alternativa
+    opportunity_adjustments: dict[str, float] | None = None  # Opportunity V3: penalidades aplicadas (pp)
+    price: dict | None = None  # price_target(): break_even_odd, min_acceptable_odd, price_gap_pct, edge_sensitivity
+    oos: dict | None = None  # checagem out-of-sample do mercado usada no estado (n, verdict)
 
 
 class NoBetVerdict(BaseModel):
@@ -417,3 +439,8 @@ class MatchAnalysis(BaseModel):
     quality_gate_passed: bool = False  # alguma seleção RECOMMENDED passou no quality gate
     evidence: EvidenceLevel | None = None  # evidência modelo × mercado para a competição
     cache_key: str | None = None  # event|pipeline|odds-version|settings-hash
+    # Iteração 3
+    clusters: list[dict] = Field(default_factory=list)  # ClusterView.to_dict(): primária + alternativas por tese
+    exposure: dict | None = None  # ExposureView.to_dict(): LOW | MEDIUM | HIGH
+    states: dict[str, int] = Field(default_factory=dict)  # contagem de seleções por estado
+    champion: str | None = None  # consenso que decidiu (ensemble | ensemble_v2)

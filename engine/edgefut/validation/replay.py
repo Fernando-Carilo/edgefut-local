@@ -45,6 +45,7 @@ from ..models.dixon_coles import dixon_coles_output, fit_dixon_coles
 from ..models.elo import HOME_ADV_CLUB, HOME_ADV_NATIONAL, EloTable, elo_probabilities, update_elo
 from ..models.ensemble import weights_from_scores
 from ..models.poisson import poisson_model
+from ..models.international_strength import fit_international, international_output
 from ..models.strength_v2 import fit_strength_v2, strength_v2_output
 from ..odds.implied import remove_margin
 from .bootstrap import bootstrap_ci, lift_pct, model_significance, paired_bootstrap_diff, roi_stat, sample_quality
@@ -225,10 +226,13 @@ class _WindowModels:
         self.dc = fit_dixon_coles(train, reference_date=ref) if want & {"dixon_coles", "ensemble", "ensemble_v2"} else None
         self.bp = fit_bivariate_poisson(train, reference_date=ref) if want & {"bivariate_poisson", "ensemble", "ensemble_v2"} else None
         hl = settings.strength_half_life_days if req.half_life_days == "settings" else req.half_life_days
-        mw = None
-        if req.friendly_weight is not None and "competition" in train:
-            mw = np.where(train["competition"].astype(str).str.contains("friendly", case=False, na=False), req.friendly_weight, 1.0)
-        self.sv2 = fit_strength_v2(train, reference_date=ref, half_life_days=hl, match_weights=mw) if want & {"poisson_v2", "ensemble_v2"} else None  # type: ignore[arg-type]
+        if want & {"poisson_v2", "ensemble_v2"}:
+            if req.is_national:
+                self.sv2 = fit_international(train, reference_date=ref, half_life_days=hl, friendly_weight=req.friendly_weight or 0.6)
+            else:
+                self.sv2 = fit_strength_v2(train, reference_date=ref, half_life_days=hl)  # type: ignore[arg-type]
+        else:
+            self.sv2 = None
         self.elo = elo
         self._sides_cache: dict[str, list] = {}
         # baselines B e C
@@ -260,7 +264,7 @@ class _WindowModels:
             return None
         return poisson_model(la=self.la, attack_home=ah, defense_home=dh, attack_away=aa, defense_away=da, home_adv_weight=ha_w, fit_matches=len(self.train))
 
-    def predict(self, home: str, away: str, neutral: bool, ensemble_weights: dict[str, dict[str, float]]) -> dict[str, tuple[tuple[float, float, float], float | None]]:
+    def predict(self, home: str, away: str, neutral: bool, ensemble_weights: dict[str, dict[str, float]], competition: str | None = None) -> dict[str, tuple[tuple[float, float, float], float | None]]:
         ha_w = 0.0 if neutral else 1.0
         outs: dict[str, tuple[tuple[float, float, float], float | None]] = {}
         want = set(self.req.models)
@@ -280,7 +284,7 @@ class _WindowModels:
             if p:
                 outs["bivariate_poisson"] = (p, _ou(o))
         if self.sv2 is not None and home in self.sv2.ratings and away in self.sv2.ratings:
-            o = strength_v2_output(self.sv2, home, away, ha_w)
+            o = international_output(self.sv2, home, away, ha_w, competition) if self.req.is_national else strength_v2_output(self.sv2, home, away, ha_w)
             p = _p3(o)
             if p:
                 outs["poisson_v2"] = (p, _ou(o))
@@ -391,7 +395,7 @@ def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest) -> tuple[
             neutral = bool(getattr(r, "neutral", False)) if getattr(r, "neutral", None) is not None and not pd.isna(getattr(r, "neutral", None)) else False
             odds, odds_ou, close, close_ou = _odds3(r), _odds_ou(r), _close3(r), _odds_ou(r, "odds_close")
             group = str(getattr(r, "season", None) or getattr(r, "tournament", None) or "") or None
-            outs = wm.predict(r.home, r.away, neutral, ens_w)
+            outs = wm.predict(r.home, r.away, neutral, ens_w, str(getattr(r, "competition", "") or ""))
             outs.update(wm.baselines(r.home, r.away, neutral, odds, odds_ou))
             for model, (p3, pou) in outs.items():
                 pr = _Pred(code, w_idx, r.date, model, p3, pou, _outcome(hg, ag), hg + ag > 2.5, hg, ag, odds, odds_ou, close, close_ou, int(mid), group)

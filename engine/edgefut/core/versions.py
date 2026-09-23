@@ -17,8 +17,8 @@ CORNERS = "corners-v1"
 CARDS = "cards-v1"
 SHOTS = "shots-v1"
 CONFIDENCE = "confidence-v2"
-OPPORTUNITY = "opportunity-v2"
-PIPELINE = "pipeline-v2"
+OPPORTUNITY = "opportunity-v3"  # V2 breakdown + penalidades (incerteza OOS, correlação, MODEL_ONLY)
+PIPELINE = "pipeline-v3"
 
 ALL_MODELS = {
     "strength": STRENGTH,

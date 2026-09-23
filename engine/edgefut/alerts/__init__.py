@@ -38,7 +38,14 @@ def _fingerprint(a: MatchAnalysis) -> dict:
         "odds": a.event.main_odds or {},
         "label": f"{a.event.home_name} × {a.event.away_name}",
         "kickoff": a.event.kickoff_utc.isoformat(),
+        # iteração 3 — watchlist de preço: primárias acionáveis e seleções "quase" (WATCHING PRICE)
+        "value": {_rk(r): r.odd for r in a.recommendations if r.is_primary and r.state in ("VALUE", "VALUE_CANDIDATE")},
+        "watching": {_rk(r): (r.price or {}).get("min_acceptable_odd") for r in a.recommendations if "WATCHING_PRICE" in r.reasons},
     }
+
+
+def _rk(r) -> str:
+    return f"{r.market_label}: {r.selection_name}" + (f" {r.line}" if r.line is not None else "")
 
 
 def scan_alerts(session: Session, analyses: list[MatchAnalysis] | None = None) -> dict:
@@ -74,6 +81,14 @@ def scan_alerts(session: Session, analyses: list[MatchAnalysis] | None = None) -
             created += _emit(session, "OPPORTUNITY_APPEARED", a.event.id, f"{cur['label']}: {cur['best']}", {"grade": cur["grade"]})
         if old.get("best") and not cur["best"]:
             created += _emit(session, "OPPORTUNITY_LOST", a.event.id, f"{cur['label']}: {old['best']} ({cur['no_bet'] or 'sem edge'})", {"reason": cur["no_bet"]}, severity="warning")
+        # watchlist de preço: seleção observada atingiu a odd mínima aceitável / oportunidade perdeu o preço
+        old_watch, old_value = old.get("watching") or {}, old.get("value") or {}
+        for key, odd in (cur.get("value") or {}).items():
+            if key in old_watch and key not in old_value:
+                created += _emit(session, "OPPORTUNITY_APPEARED", a.event.id, f"{cur['label']}: {key} atingiu o preço-alvo (odd {odd:.2f} ≥ mín. {old_watch[key]:.2f})" if old_watch.get(key) else f"{cur['label']}: {key} atingiu o preço-alvo (odd {odd:.2f})", {"trigger": "price_target", "odd": odd, "min_acceptable_odd": old_watch.get(key)})
+        for key, odd in old_value.items():
+            if key in (cur.get("watching") or {}) and key not in (cur.get("value") or {}):
+                created += _emit(session, "OPPORTUNITY_LOST", a.event.id, f"{cur['label']}: {key} perdeu o preço (odd abaixo do mínimo aceitável)", {"trigger": "price_target", "previous_odd": odd, "min_acceptable_odd": (cur.get("watching") or {}).get(key)}, severity="warning")
     # mantém estado de eventos ainda futuros que não estavam neste ciclo
     horizon = (datetime.utcnow() - timedelta(hours=3)).isoformat()
     for k, v in prev.items():

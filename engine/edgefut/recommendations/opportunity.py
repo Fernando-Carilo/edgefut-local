@@ -1,4 +1,4 @@
-"""Opportunity Score V2 (opportunity-v2): 0-100, componentes explícitos e pesos configuráveis.
+"""Opportunity Score V3 (opportunity-v3) = breakdown V2 (abaixo) + penalidades aplicadas no engine: 0-100, componentes explícitos e pesos configuráveis.
 
 Cada componente vale 0-1 e carrega uma nota com o número que o originou, para que a UI
 possa mostrar "por que 71 e não 90". Pesos vêm de `settings.opportunity_weights`; a soma é
