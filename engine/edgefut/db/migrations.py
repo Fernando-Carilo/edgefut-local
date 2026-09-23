@@ -42,10 +42,25 @@ def _v2_identity_live_closing(conn: Connection) -> None:
     _add_column(conn, "prediction_snapshot", "closing_odds", "JSON")
 
 
+def _v3_settlement_governance(conn: Connection) -> None:
+    for col, ddl in (
+        ("settlement_status", "VARCHAR(24)"),
+        ("settlement_attempts", "INTEGER DEFAULT 0"),
+        ("settlement_error", "VARCHAR(300)"),
+        ("settlement_checked_at", "DATETIME"),
+    ):
+        _add_column(conn, "event", col, ddl)
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_event_settlement_status ON event (settlement_status)"))
+    _add_column(conn, "model_registry", "role", "VARCHAR(16)")
+    # eventos já liquidados antes desta versão
+    conn.execute(text("UPDATE event SET settlement_status = 'SETTLED' WHERE settlement_status IS NULL AND home_score IS NOT NULL AND away_score IS NOT NULL"))
+
+
 MIGRATIONS: list[tuple[int, list[str | Callable[[Connection], None]]]] = [
     # (versão, [SQL ou callable...]) — adicionar novas entradas ao final, nunca editar as antigas.
     (1, []),
     (2, [_v2_identity_live_closing]),
+    (3, [_v3_settlement_governance]),
 ]
 
 

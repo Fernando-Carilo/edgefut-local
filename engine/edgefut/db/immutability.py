@@ -17,7 +17,7 @@ from datetime import datetime
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
 
-from .models import PREDICTION_FIELDS, PredictionSnapshot, SnapshotCorrection
+from .models import PREDICTION_FIELDS, SHADOW_PREDICTION_FIELDS, PredictionSnapshot, ShadowPrediction, SnapshotCorrection
 
 log = logging.getLogger(__name__)
 
@@ -28,12 +28,19 @@ class ImmutableSnapshotError(RuntimeError):
 
 def _guard(session: Session, flush_context, instances) -> None:  # noqa: ANN001
     for obj in session.dirty:
-        if not isinstance(obj, PredictionSnapshot):
+        if isinstance(obj, PredictionSnapshot):
+            fields, label = PREDICTION_FIELDS, "snapshot"
+        elif isinstance(obj, ShadowPrediction):
+            fields, label = SHADOW_PREDICTION_FIELDS, "shadow prediction"
+        else:
             continue
         state = inspect(obj)
-        changed = [a.key for a in state.attrs if a.key in PREDICTION_FIELDS and a.history.has_changes()]
+        changed = [a.key for a in state.attrs if a.key in fields and a.history.has_changes()]
         if changed:
-            raise ImmutableSnapshotError(f"snapshot {obj.id}: campos de previsão são imutáveis ({', '.join(sorted(changed))})")
+            raise ImmutableSnapshotError(f"{label} {obj.id}: campos de previsão são imutáveis ({', '.join(sorted(changed))})")
+    for obj in session.deleted:
+        if isinstance(obj, ShadowPrediction):
+            raise ImmutableSnapshotError(f"shadow prediction {obj.id}: registro append-only, não pode ser apagado")
 
 
 _installed = False

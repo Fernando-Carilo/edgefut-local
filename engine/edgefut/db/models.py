@@ -64,6 +64,11 @@ class Event(Base):
     away_score: Mapped[int | None] = mapped_column(Integer)
     result_source: Mapped[str | None] = mapped_column(String(64))
     settled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # reconciliação: todo evento encerrado está em SETTLED | SETTLEMENT_PENDING | SETTLEMENT_ERROR
+    settlement_status: Mapped[str | None] = mapped_column(String(24), index=True)
+    settlement_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    settlement_error: Mapped[str | None] = mapped_column(String(300))
+    settlement_checked_at: Mapped[datetime | None] = mapped_column(DateTime)
     # metadados
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -215,6 +220,76 @@ class ModelRegistry(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     deprecated: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    # governança: champion (em produção) | challenger (shadow) | baseline | none
+    role: Mapped[str | None] = mapped_column(String(16))
+
+
+class ShadowPrediction(Base):
+    """Shadow mode — toda recomendação gerada para um evento futuro é registrada aqui,
+    sem interação do usuário. Append-only: as colunas de previsão nunca são atualizadas;
+    só `result`/`won`/`settled_at`/`closing_odd` são preenchidas depois pelo settlement."""
+
+    __tablename__ = "shadow_prediction"
+    __table_args__ = (
+        Index("ix_shadow_event_sel", "event_id", "market_key", "selection_key", "line"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id"), index=True)
+    snapshot_id: Mapped[int | None] = mapped_column(ForeignKey("prediction_snapshot.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    kickoff_utc: Mapped[datetime] = mapped_column(DateTime, index=True)
+    competition_name: Mapped[str | None] = mapped_column(String(160))
+    dataset_code: Mapped[str | None] = mapped_column(String(32))
+    market_key: Mapped[str] = mapped_column(String(40))
+    selection_key: Mapped[str] = mapped_column(String(80))
+    line: Mapped[float | None] = mapped_column(Float)
+    odd: Mapped[float | None] = mapped_column(Float)
+    model_prob: Mapped[float] = mapped_column(Float)
+    model_prob_raw: Mapped[float | None] = mapped_column(Float)
+    model_prob_calibrated: Mapped[float | None] = mapped_column(Float)
+    market_prob: Mapped[float | None] = mapped_column(Float)
+    edge_pp: Mapped[float | None] = mapped_column(Float)
+    ev_pct: Mapped[float | None] = mapped_column(Float)
+    confidence_score: Mapped[float | None] = mapped_column(Float)
+    opportunity_score: Mapped[float | None] = mapped_column(Float)
+    data_quality: Mapped[float | None] = mapped_column(Float)
+    state: Mapped[str] = mapped_column(String(24))  # MODEL_ONLY | MARKET_OBSERVED | VALUE_CANDIDATE | VALUE | OBSERVATION | NO_BET
+    evidence: Mapped[str | None] = mapped_column(String(16))
+    cluster_id: Mapped[str | None] = mapped_column(String(64))
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    model_version: Mapped[str] = mapped_column(String(64))
+    model_versions: Mapped[dict | None] = mapped_column(JSON)
+    # liquidação (únicos campos escritos depois)
+    won: Mapped[bool | None] = mapped_column(Boolean)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    closing_odd: Mapped[float | None] = mapped_column(Float)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+SHADOW_PREDICTION_FIELDS = frozenset(
+    {
+        "event_id", "snapshot_id", "created_at", "kickoff_utc", "competition_name", "dataset_code", "market_key",
+        "selection_key", "line", "odd", "model_prob", "model_prob_raw", "model_prob_calibrated", "market_prob",
+        "edge_pp", "ev_pct", "confidence_score", "opportunity_score", "data_quality", "state", "evidence",
+        "cluster_id", "is_primary", "model_version", "model_versions",
+    }
+)
+
+
+class ValidationRun(Base):
+    """Resultado persistido de uma validação (replay histórico, comparação de modelos, drift)."""
+
+    __tablename__ = "validation_run"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)  # replay | model_comparison | drift | daily_report
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(36))
+    request: Mapped[dict | None] = mapped_column(JSON)
+    summary: Mapped[dict | None] = mapped_column(JSON)
+    detail: Mapped[dict | None] = mapped_column(JSON)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
 
 
 class CalibrationModel(Base):

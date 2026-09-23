@@ -157,15 +157,24 @@ def results_health(session: Session) -> ComponentHealth:
         select(func.count()).select_from(PredictionSnapshot).where(PredictionSnapshot.result.is_(None), PredictionSnapshot.kickoff_utc < now - timedelta(hours=36))
     ).scalar() or 0
     fr = assess("results", last, source="superbet+football-data")
-    if last is None and settled == 0 and pending == 0:
+    from ..backtesting.reconciliation import summary as recon_summary
+
+    recon = recon_summary(session)
+    unsettled = int(recon.get("unsettled_finished") or 0)
+    if last is None and settled == 0 and pending == 0 and unsettled == 0:
         status, summary = "HEALTHY", "Nada a liquidar ainda."
+    elif recon.get("error"):
+        status, summary = "DEGRADED", f"{recon['error']} evento(s) em SETTLEMENT_ERROR · {recon['pending']} pendentes · unsettled finished events: {unsettled}"
     elif overdue > 0:
-        status, summary = "DEGRADED", f"{overdue} previsão(ões) sem resultado há mais de 36 h."
-    elif fr.status in ("STALE", "EXPIRED") and pending:
-        status, summary = "STALE", f"Última liquidação {_ago(last)}; {pending} pendentes."
+        status, summary = "DEGRADED", f"{overdue} previsão(ões) sem resultado há mais de 36 h · unsettled finished events: {unsettled}"
+    elif fr.status in ("STALE", "EXPIRED") and (pending or unsettled):
+        status, summary = "STALE", f"Última liquidação {_ago(last)}; {pending} pendentes · unsettled finished events: {unsettled}"
     else:
-        status, summary = "HEALTHY", f"{settled} liquidadas · {pending} pendentes"
-    return ComponentHealth(key="results", name="Resultados (settlement)", status=status, summary=summary, last_update=last, freshness=fr, details={"settled": int(settled), "pending": int(pending), "overdue_36h": int(overdue)})  # type: ignore[arg-type]
+        status, summary = "HEALTHY", f"{settled} previsões liquidadas · eventos encerrados: {recon['settled']} SETTLED · unsettled finished events: {unsettled}"
+    return ComponentHealth(
+        key="results", name="Resultados (settlement)", status=status, summary=summary, last_update=last, freshness=fr,  # type: ignore[arg-type]
+        details={"settled": int(settled), "pending": int(pending), "overdue_36h": int(overdue), "reconciliation": recon, "unsettled_finished_events": unsettled},
+    )
 
 
 def database_health(session: Session) -> ComponentHealth:

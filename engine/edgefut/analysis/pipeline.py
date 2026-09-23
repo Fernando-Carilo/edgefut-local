@@ -40,6 +40,7 @@ from ..features.strength import (
     strength_score,
     to_sides,
 )
+from ..features.temporal import TemporalFeatureStore
 from ..features.venue import resolve_venue
 from ..models.counts import cards_engine, corners_engine, shots_engine
 from ..models.dixon_coles import dc_cache, dixon_coles_output, fit_dixon_coles
@@ -315,13 +316,16 @@ def analyze_event(
     store = get_store()
 
     # ---- histórico (as_of: nunca dados posteriores ao kickoff nem ao agora) ----
+    # Toda leitura histórica passa pelo TemporalFeatureStore, que levanta LeakageError
+    # se qualquer linha com date >= as_of chegar aos modelos (ver features/temporal.py).
     as_of = min(datetime.utcnow(), row.kickoff_utc)
     codes = resolved.dataset_codes
-    home_df = store.team_matches(resolved.home.canonical, resolved.home_datasets, before=as_of, limit=40) if resolved.home.canonical else pd.DataFrame()
-    away_df = store.team_matches(resolved.away.canonical, resolved.away_datasets, before=as_of, limit=40) if resolved.away.canonical else pd.DataFrame()
-    comp_df = store.competition_matches(codes, before=as_of) if codes else pd.DataFrame()
-    if profile.is_national_teams and not comp_df.empty:
-        comp_df = comp_df[comp_df["date"] >= pd.Timestamp(datetime.utcnow() - timedelta(days=3 * 365))]
+    tslice = TemporalFeatureStore(store).slice(
+        home=resolved.home.canonical, away=resolved.away.canonical, codes=codes, as_of=as_of,
+        is_national=profile.is_national_teams, team_limit=40,
+        home_codes=resolved.home_datasets, away_codes=resolved.away_datasets,
+    )
+    home_df, away_df, comp_df = tslice.home_matches, tslice.away_matches, tslice.competition_matches
     la = league_averages(comp_df)
 
     # ---- venue -------------------------------------------------------------
@@ -351,7 +355,7 @@ def analyze_event(
     # ---- ELO -----------------------------------------------------------------
     elo_key = ("elo", tuple(codes), len(comp_df))
     if codes and not comp_df.empty:
-        elo_df = store.competition_matches(codes, since=datetime(2000, 1, 1), before=as_of) if profile.is_national_teams else comp_df
+        elo_df = tslice.elo_matches if (profile.is_national_teams and tslice.elo_matches is not None) else comp_df
         table = elo_cache.get(elo_key, lambda: fit_elo(elo_df, profile.is_national_teams))
     else:
         table = fit_elo(pd.DataFrame(), False)
@@ -372,7 +376,7 @@ def analyze_event(
     # ---- H2H --------------------------------------------------------------------
     h2h = None
     if resolved.home.canonical and resolved.away.canonical and codes:
-        h2h_df = store.h2h(resolved.home.canonical, resolved.away.canonical, codes, limit=10, before=as_of)
+        h2h_df = tslice.h2h
         h2h = summarize_h2h(h2h_df, resolved.home.canonical, resolved.away.canonical, str(h2h_df["source"].iloc[0]) if not h2h_df.empty else "historical", str(h2h_df["source_url"].iloc[0]) if not h2h_df.empty else None)
 
     # ---- modelos de gols ---------------------------------------------------------

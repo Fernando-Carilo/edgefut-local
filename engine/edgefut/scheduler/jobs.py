@@ -43,6 +43,9 @@ _state: dict = {
     "last_cache_cleanup": None,
     "last_ensemble_weights": None,
     "last_live_poll": None,
+    "last_reconciliation": None,
+    "last_shadow_report": None,
+    "last_drift_check": None,
     "radar_running": False,
     "errors": [],
 }
@@ -62,6 +65,9 @@ JOB_LABELS = {
     "cache_cleanup": "Limpeza de cache",
     "alerts": "Alertas locais",
     "live_poll": "Ao vivo (observação)",
+    "reconcile": "Reconciliação de settlement",
+    "shadow_report": "Relatório diário do modelo (shadow)",
+    "drift": "Drift monitor",
 }
 
 
@@ -338,6 +344,59 @@ def job_live_poll() -> dict:
     return run_job("live_poll", _live_poll, state_key="last_live_poll")
 
 
+def _reconcile() -> dict:
+    from ..backtesting.reconciliation import reconcile
+
+    with session_scope() as s:
+        res = reconcile(s)
+    if res.get("shadow_settled"):
+        run_in_background(job_update_performance)
+    return res
+
+
+def job_reconcile() -> dict:
+    return run_job("reconcile", _reconcile, state_key="last_reconciliation")
+
+
+def _shadow_report() -> dict:
+    from ..validation.shadow import daily_report
+
+    with session_scope() as s:
+        return daily_report(s, persist=True)
+
+
+def job_shadow_report() -> dict:
+    return run_job("shadow_report", _shadow_report, state_key="last_shadow_report")
+
+
+def _drift() -> dict:
+    from ..validation.drift import check_drift
+
+    with session_scope() as s:
+        return check_drift(s, persist=True)
+
+
+def job_drift() -> dict:
+    return run_job("drift", _drift, state_key="last_drift_check")
+
+
+def mark_orphan_runs() -> int:
+    """Execuções deixadas em `running` por um processo anterior (crash, kill, VM suspensa)
+    são marcadas `interrupted` no boot — nunca ficam eternamente 'rodando'."""
+    now = datetime.utcnow()
+    try:
+        with session_scope() as s:
+            rows = s.execute(select(JobRun).where(JobRun.status == "running")).scalars().all()
+            for r in rows:
+                r.status = "interrupted"
+                r.finished_at = now
+                r.errors = ["processo reiniciado antes do fim da execução"]
+            return len(rows)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("não foi possível marcar execuções órfãs: %s", exc)
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # lifecycle
 # ---------------------------------------------------------------------------
@@ -349,8 +408,14 @@ def start() -> BackgroundScheduler | None:
     global _scheduler
     if not settings.scheduler_enabled or _scheduler is not None:
         return _scheduler
+    orphans = mark_orphan_runs()
+    if orphans:
+        log.warning("%d execução(ões) órfã(s) marcadas como interrompidas", orphans)
     sched = BackgroundScheduler(timezone="UTC")
-    common = {"max_instances": 1, "coalesce": True, "misfire_grace_time": 120}
+    # misfire_grace_time=None: um job perdido (VM suspensa, processo congelado) roda assim
+    # que o scheduler acorda, uma única vez (coalesce). Antes, um `settle` perdido só voltava
+    # na próxima hora cheia — e nada registrava a lacuna.
+    common = {"max_instances": 1, "coalesce": True, "misfire_grace_time": None}
     sched.add_job(job_sync_events, "interval", minutes=settings.events_refresh_min, id="events", **common)
     sched.add_job(job_sync_odds, "interval", minutes=settings.odds_refresh_min, id="odds", **common)
     sched.add_job(job_sync_history, "interval", hours=settings.history_refresh_hours, id="history", **common)
@@ -362,6 +427,9 @@ def start() -> BackgroundScheduler | None:
     sched.add_job(job_ensemble_weights, "interval", hours=24, id="ensemble_weights", **common)
     sched.add_job(job_cache_cleanup, "interval", hours=24, id="cache_cleanup", **common)
     sched.add_job(job_live_poll, "interval", seconds=max(20, settings.live_poll_seconds), id="live_poll", **common)
+    sched.add_job(job_reconcile, "interval", hours=6, id="reconcile", next_run_time=datetime.utcnow() + timedelta(seconds=90), **common)
+    sched.add_job(job_shadow_report, "interval", hours=24, id="shadow_report", next_run_time=datetime.utcnow() + timedelta(minutes=5), **common)
+    sched.add_job(job_drift, "interval", hours=24, id="drift", next_run_time=datetime.utcnow() + timedelta(minutes=6), **common)
     sched.start()
     _scheduler = sched
     return sched

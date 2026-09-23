@@ -70,6 +70,8 @@ def settle_pending(session: Session, max_events: int = 40) -> dict:
         ev.home_score, ev.away_score = result.hg, result.ag
         ev.result_source = result.source
         ev.settled_at = datetime.utcnow()
+        ev.settlement_status = "SETTLED"
+        ev.settlement_error = None
         snaps = session.execute(select(PredictionSnapshot).where(PredictionSnapshot.event_id == ev.id, PredictionSnapshot.result.is_(None))).scalars().all()
         for s in snaps:
             outcomes = {}

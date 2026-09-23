@@ -64,6 +64,17 @@ class Settings(BaseSettings):
         }
     )
 
+    # Validação estatística (iteração 3) — limites de qualidade de amostra
+    sample_early_min: int = 100  # < EARLY → INSUFFICIENT
+    sample_moderate_min: int = 300
+    sample_strong_min: int = 1000
+    bootstrap_resamples: int = 1000
+    # decaimento temporal do strength-v2 (meia-vida em dias); escolhido por walk-forward
+    # (validation/decay.py) — não por gosto. None → sem decaimento.
+    strength_half_life_days: float | None = 180.0
+    # estados de VALUE exigem OOS: mínimo de apostas liquidadas no mercado para permitir VALUE
+    value_min_oos_bets: int = 100
+
     # LLM opcional
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "llama3.1"

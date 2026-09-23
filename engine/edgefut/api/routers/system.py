@@ -104,6 +104,7 @@ def jobs_run(job: str):
         "radar": jobs.job_refresh_radar, "closing_lines": jobs.job_closing_lines, "performance": jobs.job_update_performance,
         "calibration": jobs.job_update_calibration, "cache_cleanup": jobs.job_cache_cleanup, "alerts": jobs.job_alerts,
         "live_poll": jobs.job_live_poll, "ensemble_weights": jobs.job_ensemble_weights,
+        "reconcile": jobs.job_reconcile, "shadow_report": jobs.job_shadow_report, "drift": jobs.job_drift,
     }.get(job)
     if fn is None:
         return JSONResponse(status_code=404, content={"detail": f"job desconhecido: {job}"})
