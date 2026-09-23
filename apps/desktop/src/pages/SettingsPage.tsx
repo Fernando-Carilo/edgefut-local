@@ -6,6 +6,18 @@ import { useEffect, useState } from "react";
 import { Card, ErrorBox, Loading, PageHeader, SectionTitle } from "@/components/ui";
 import { api } from "@/lib/api";
 
+const OPP_LABELS: Record<string, string> = {
+  model_confidence: "Confiança do modelo",
+  data_quality: "Qualidade dos dados",
+  calibration_quality: "Qualidade da calibração",
+  edge: "Edge",
+  ev: "EV",
+  odds_freshness: "Frescor das odds",
+  model_agreement: "Concordância entre modelos",
+  historical_performance: "Performance histórica",
+  sample_size: "Tamanho da amostra",
+};
+
 export function SettingsPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["settings"], queryFn: api.settings });
@@ -21,6 +33,8 @@ export function SettingsPage() {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["models"] });
+      qc.invalidateQueries({ queryKey: ["radar"] });
+      qc.invalidateQueries({ queryKey: ["analysis"] });
     },
   });
   if (q.isLoading || !form) return <Loading />;
@@ -69,6 +83,56 @@ export function SettingsPage() {
               <input className="input" type="number" step="0.05" value={form.max_odd} onChange={(e) => set("max_odd", Number(e.target.value))} />
             </F>
           </div>
+        </Card>
+        <Card>
+          <SectionTitle title="Quality Gate" subtitle="Checks obrigatórios para uma seleção entrar em TOP OPORTUNIDADES. O sistema nunca afrouxa esses valores sozinho para 'achar' entradas." />
+          <div className="grid grid-cols-2 gap-3">
+            <F label="Qualidade mínima dos dados (%) · piso 40">
+              <input className="input" type="number" min={40} max={100} value={form.gate_min_data_quality} onChange={(e) => set("gate_min_data_quality", Number(e.target.value))} />
+            </F>
+            <F label="Confiança mínima (0–100) · piso 50">
+              <input className="input" type="number" min={50} max={100} value={form.gate_min_confidence} onChange={(e) => set("gate_min_confidence", Number(e.target.value))} />
+            </F>
+            <F label="Amostra mínima (jogos) · piso 10">
+              <input className="input" type="number" min={10} value={form.gate_min_sample} onChange={(e) => set("gate_min_sample", Number(e.target.value))} />
+            </F>
+            <F label="Divergência máxima entre modelos (pp) · teto 15">
+              <input className="input" type="number" step="0.5" max={15} value={form.gate_max_disagreement_pp} onChange={(e) => set("gate_max_disagreement_pp", Number(e.target.value))} />
+            </F>
+            <F label="Edge máximo sem calibrador (pp) · teto 25">
+              <input className="input" type="number" step="0.5" max={25} value={form.gate_max_edge_pp_uncalibrated} onChange={(e) => set("gate_max_edge_pp_uncalibrated", Number(e.target.value))} />
+            </F>
+            <F label="HIGH PROBABILITY a partir de (prob.) · piso 0.55">
+              <input className="input" type="number" step="0.01" min={0.55} max={0.99} value={form.high_probability_min} onChange={(e) => set("high_probability_min", Number(e.target.value))} />
+            </F>
+          </div>
+          <p className="mt-1 text-[11px] text-ink-3">Valores fora dos pisos/tetos são corrigidos pelo engine ao salvar (HARD_FLOORS / HARD_CEILINGS).</p>
+        </Card>
+        <Card>
+          <SectionTitle title="Opportunity Score V2" subtitle="Pesos dos 9 componentes (normalizados para somar 100). Ordena o Radar — nunca a odd." />
+          <div className="grid grid-cols-3 gap-2">
+            {Object.entries(form.opportunity_weights).map(([k, v]) => (
+              <F key={k} label={OPP_LABELS[k] ?? k}>
+                <input className="input" type="number" min={0} step="1" value={v} onChange={(e) => set("opportunity_weights", { ...form.opportunity_weights, [k]: Number(e.target.value) })} />
+              </F>
+            ))}
+          </div>
+          <p className="text-[11px] text-ink-3">Soma atual: {Object.values(form.opportunity_weights).reduce((a, b) => a + b, 0)} (normalizada automaticamente).</p>
+        </Card>
+        <Card>
+          <SectionTitle title="Odds e ao vivo" subtitle="Remoção de margem e cadência de observação" />
+          <div className="grid grid-cols-2 gap-3">
+            <F label="Método de probabilidade justa">
+              <select className="input" value={form.margin_method} onChange={(e) => set("margin_method", e.target.value as SettingsModel["margin_method"])}>
+                <option value="SHIN">Shin (corrige favorite-longshot)</option>
+                <option value="MULTIPLICATIVE">Multiplicativo (proporcional)</option>
+              </select>
+            </F>
+            <F label="Poll ao vivo (s) · mínimo 20">
+              <input className="input" type="number" min={20} value={form.live_poll_seconds} onChange={(e) => set("live_poll_seconds", Number(e.target.value))} />
+            </F>
+          </div>
+          <p className="text-[11px] text-ink-3">Ambos os métodos são calculados e armazenados em cada snapshot; este ajuste define qual é exibido e usado no edge.</p>
         </Card>
         <Card>
           <SectionTitle title="Banca" subtitle="Somente para o simulador de stake. O EdgeFut não realiza apostas." />
