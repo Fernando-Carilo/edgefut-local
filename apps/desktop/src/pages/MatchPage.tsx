@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { useParams } from "react-router-dom";
 
-import { ConfidenceIndicator, ConflictsButton, EvidenceBanner, EventWhyNot, FreshnessStrip, ModelComparisonTable, MovementLine, RecommendationDetail } from "@/components/TrustPanels";
+import { ClustersPanel, ConfidenceIndicator, ConflictsButton, EvidenceBanner, EventWhyNot, FreshnessStrip, ModelComparisonTable, MovementLine, RecommendationDetail, WhyChangedPanel } from "@/components/TrustPanels";
 import { Card, EdgeValue, ErrorBox, EvidenceChip, GateChip, GradeBadge, KV, Loading, MeterBar, ProbBar, Score, SectionTitle, StatusChip, Tooltip, VenueChip } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useUi } from "@/store/ui";
@@ -163,6 +163,18 @@ export function MatchPage() {
           </div>
           {recommended.length > 4 && <div className="mt-2 text-xs text-ink-2">+{recommended.length - 4} recomendações adicionais na tabela de mercados abaixo.</div>}
         </section>
+      )}
+      {(a.clusters?.length ?? 0) > 0 && (
+        <Card>
+          <SectionTitle title="Teses e exposição" subtitle="Uma PRIMÁRIA por tese (correlation engine). DNB, dupla chance e handicap do mesmo time são a mesma aposta com outro preço — não somam oportunidades." />
+          <ClustersPanel a={a} />
+        </Card>
+      )}
+      {a.changes && (
+        <Card>
+          <SectionTitle title="Why model changed" subtitle="O que mudou desde o último snapshot deste evento — odds, amostra, forças, versão ou campeão." />
+          <WhyChangedPanel a={a} />
+        </Card>
       )}
       {watch.length > 0 && (
         <section>
@@ -407,6 +419,14 @@ function TeamBlock({ team, side }: { team: TeamProfile; side: "home" | "away" })
         <KV k="Amostra" v={`${team.sample_size} jogos`} />
         <KV k="Ataque (rel.)" v={num(team.attack, 2)} />
         <KV k="Defesa (rel.)" v={num(team.defense, 2)} />
+        {team.ratings_v2 && (
+          <>
+            <KV k="Ataque v2 (adv.)" v={<span title="strength-v2: ajustado pela força dos adversários enfrentados, com decay temporal">{num(team.ratings_v2.attack, 3)}</span>} />
+            <KV k="Defesa v2 (adv.)" v={<span title="strength-v2: < 1 = sofre menos gols que a média">{num(team.ratings_v2.defense, 3)}</span>} />
+            {team.ratings_v2.strength_of_schedule !== undefined && team.ratings_v2.strength_of_schedule !== null && <KV k="Calendário (SoS)" v={num(team.ratings_v2.strength_of_schedule, 3)} />}
+            {team.ratings_v2.effective_matches !== undefined && <KV k="Jogos efetivos" v={num(team.ratings_v2.effective_matches, 1)} />}
+          </>
+        )}
         {w10 && (
           <>
             <KV k="Gols pró (10)" v={num(w10.goals_for, 2)} />

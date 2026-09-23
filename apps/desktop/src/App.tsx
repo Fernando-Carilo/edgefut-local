@@ -13,6 +13,7 @@ import { MultiplesPage } from "@/pages/MultiplesPage";
 import { RadarPage } from "@/pages/RadarPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { AlertsPage, DiagnosticsPage, JobsPage } from "@/pages/SystemPages";
+import { ValidationPage } from "@/pages/ValidationPage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15000 } },
@@ -38,6 +39,7 @@ export function App() {
               <Route path="fontes" element={<SourcesPage />} />
               <Route path="modelos" element={<ModelsPage />} />
               <Route path="performance" element={<PerformancePage />} />
+              <Route path="validacao" element={<ValidationPage />} />
               <Route path="alertas" element={<AlertsPage />} />
               <Route path="sistema/jobs" element={<JobsPage />} />
               <Route path="sistema/diagnostico" element={<DiagnosticsPage />} />

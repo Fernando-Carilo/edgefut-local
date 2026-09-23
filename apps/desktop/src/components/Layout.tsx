@@ -19,6 +19,7 @@ import {
   Stethoscope,
   Target,
   Zap,
+  ShieldCheck,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
@@ -53,6 +54,7 @@ const nav: { title: string | null; items: NavItem[] }[] = [
       { to: "/fontes", label: "Fontes", icon: Database },
       { to: "/modelos", label: "Modelos", icon: Activity },
       { to: "/performance", label: "Performance", icon: BarChart3 },
+      { to: "/validacao", label: "Validação", icon: ShieldCheck },
     ],
   },
   {

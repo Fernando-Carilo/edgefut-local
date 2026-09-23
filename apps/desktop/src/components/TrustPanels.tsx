@@ -8,7 +8,7 @@ import { useState } from "react";
 
 import { api } from "@/lib/api";
 
-import { EvidenceChip, FreshnessChip, GateChip, LabelChip, MeterBar, Modal, Tooltip } from "./ui";
+import { EvidenceChip, ExposureChip, FreshnessChip, GateChip, LabelChip, MeterBar, Modal, StateChip, Tooltip } from "./ui";
 
 // ---------------------------------------------------------------- EDGEFUT CONFIDENCE
 const GROUP_ORDER: ConfidenceGroup[] = ["DATA_QUALITY", "MODEL_AGREEMENT", "CALIBRATION", "HISTORICAL_SAMPLE", "FRESHNESS", "CONTEXT"];
@@ -297,7 +297,13 @@ export function RecommendationDetail({ r, evidence }: { r: Recommendation; evide
             {r.line !== null && !r.selection_name.includes(String(r.line)) ? ` ${r.line}` : ""} <span className="odd-pill ml-1 align-middle text-base">{odd(r.odd)}</span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1">
-            <LabelChip label={r.label} />
+            <StateChip state={r.state} text={r.state_text} />
+            {r.label && r.label !== r.state && <LabelChip label={r.label} />}
+            {r.is_primary === false && r.primary_of && (
+              <span className="chip bg-gray-100 text-ink-2" title={`Alternativa da mesma tese que ${r.primary_of.replace("|", " · ")} — não é uma oportunidade adicional.`}>
+                ALTERNATIVA
+              </span>
+            )}
             {gate && <GateChip passed={gate.passed} failed={gate.failed} />}
             <EvidenceChip level={r.evidence ?? evidence} compact />
             <span className={clsx("chip", r.status === "RECOMMENDED" ? "bg-success-50 text-success" : r.status === "WATCH" ? "bg-warning-50 text-warning" : "bg-gray-100 text-ink-2")}>{r.status === "RECOMMENDED" ? "Recomendada" : r.status === "WATCH" ? "Em observação" : "Não entrar"}</span>
@@ -337,6 +343,13 @@ export function RecommendationDetail({ r, evidence }: { r: Recommendation; evide
         <WhyBlock title="Why this bet" lines={r.why} tone="ok" />
         <WhyBlock title="Why not / limitações" lines={r.why_not} tone="warn" />
       </div>
+
+      {r.state === "MODEL_ONLY" && (
+        <div className="mt-2 rounded-lg bg-warning-50/60 px-3 py-2 text-xs text-warning">
+          <b>MODEL ONLY:</b> {r.state_text ?? "Probabilidade calculada, mas sem preço de mercado válido para determinar valor."} Não existe edge, EV, VALUE nem ROI aqui.
+        </div>
+      )}
+      {r.price && r.state !== "MODEL_ONLY" && <PriceTargetBlock r={r} />}
 
       <div className="mt-2 rounded-lg bg-bg px-3 py-2 text-xs">
         <span className="font-semibold">RAW vs CALIBRATED:</span> probabilidade crua {pct(raw, 1)}
@@ -398,6 +411,155 @@ export function RecommendationDetail({ r, evidence }: { r: Recommendation; evide
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Price target (§23–25)
+function PriceTargetBlock({ r }: { r: Recommendation }) {
+  const p = r.price!;
+  const gap = p.price_gap_pct;
+  const sens = p.edge_sensitivity;
+  const watching = r.reasons.includes("WATCHING_PRICE");
+  return (
+    <div className={clsx("mt-2 rounded-lg px-3 py-2 text-xs", watching ? "bg-warning-50/60" : "bg-bg")}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="font-semibold">PRICE TARGET:</span>
+        <span>
+          break-even <b className="tabular-nums">{odd(p.break_even_odd)}</b>
+        </span>
+        <span>
+          odd mínima aceitável <b className="tabular-nums">{p.min_acceptable_odd ? odd(p.min_acceptable_odd) : "—"}</b> <span className="text-ink-3">(limitada por {p.min_odd_reason === "edge" ? "edge mínimo" : "EV mínimo"})</span>
+        </span>
+        <span>
+          atual <b className="tabular-nums">{odd(r.odd)}</b>{" "}
+          {gap !== undefined && (
+            <span className={clsx("tabular-nums", gap >= 0 ? "text-success" : "text-danger")}>
+              ({gap >= 0 ? "+" : ""}{gap.toFixed(1)}% vs mínimo)
+            </span>
+          )}
+        </span>
+        {r.oos && (
+          <span title={`Prova out-of-sample neste mercado: N=${r.oos.n}${r.oos.min ? ` (mín. ${r.oos.min})` : ""}${r.oos.source ? ` · fonte ${r.oos.source}` : ""}`}>
+            OOS <b>{r.oos.verdict ?? (r.oos.n >= (r.oos.min ?? 0) ? "OK" : "INSUFICIENTE")}</b> <span className="text-ink-3">N={r.oos.n}</span>
+          </span>
+        )}
+      </div>
+      {watching && <div className="mt-1 font-semibold text-warning">Probabilidade interessante, mas preço atual não oferece margem suficiente.</div>}
+      {sens && (
+        <div className="mt-1 text-ink-2">
+          Sensibilidade ±{p.edge_sensitivity_pp ?? 3} pp na probabilidade: edge {sens.prob_minus.edge_pp > 0 ? "+" : ""}{sens.prob_minus.edge_pp.toFixed(1)} pp / EV {sens.prob_minus.ev_pct > 0 ? "+" : ""}{sens.prob_minus.ev_pct.toFixed(1)}% (−) · {sens.prob_plus.edge_pp > 0 ? "+" : ""}{sens.prob_plus.edge_pp.toFixed(1)} pp / EV {sens.prob_plus.ev_pct > 0 ? "+" : ""}{sens.prob_plus.ev_pct.toFixed(1)}% (+)
+          {p.edge_survives_minus !== undefined && (
+            <span className={clsx("ml-1 font-semibold", p.edge_survives_minus ? "text-success" : "text-warning")}>{p.edge_survives_minus ? "· edge sobrevive ao cenário pessimista" : "· edge NÃO sobrevive ao cenário pessimista"}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Clusters / exposição (§3–4, §28)
+export function ClustersPanel({ a }: { a: MatchAnalysis }) {
+  const clusters = a.clusters ?? [];
+  const actionable = clusters.filter((c) => c.state === "VALUE" || c.state === "VALUE_CANDIDATE");
+  const byKey = new Map<string, Recommendation>(a.recommendations.map((r) => [`${r.market_key}|${r.selection_key}|${r.line}`, r]));
+  const name = (k: string | null) => {
+    if (!k) return "—";
+    const r = byKey.get(k);
+    return r ? `${r.market_label}: ${r.selection_name}${r.line !== null && !r.selection_name.includes(String(r.line)) ? ` ${r.line}` : ""} @ ${odd(r.odd)}` : k;
+  };
+  if (clusters.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <ExposureChip level={a.exposure?.level} note={a.exposure?.note} />
+        <span className="text-xs text-ink-2">
+          {actionable.length} tese(s) acionável(is) de {clusters.length} · {a.exposure?.note}
+        </span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {clusters
+          .filter((c) => c.state && c.state !== "NO_BET" && c.state !== "MARKET_OBSERVED")
+          .map((c) => (
+            <div key={c.cluster_id} className={clsx("rounded-lg border p-3 text-xs", actionable.includes(c) ? "border-primary/40" : "border-line")}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{c.label}</span>
+                <StateChip state={c.state} />
+              </div>
+              <div className="mt-1">
+                <span className="text-ink-3">Primária: </span>
+                <b>{name(c.primary)}</b>
+              </div>
+              {c.alternatives.length > 0 && (
+                <div className="mt-0.5 text-ink-2">
+                  <span className="text-ink-3">Alternativas (mesma tese, não somam): </span>
+                  {c.alternatives.map(name).join(" · ")}
+                </div>
+              )}
+            </div>
+          ))}
+      </div>
+      {a.exposure && a.exposure.correlated_pairs.length > 0 && (
+        <div className="mt-2 text-[11px] text-warning">Teses correlacionadas entre si: {a.exposure.correlated_pairs.map((p) => p.join(" ↔ ")).join(" · ")} — não são independentes.</div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- WHY MODEL CHANGED (§39)
+export function WhyChangedPanel({ a }: { a: MatchAnalysis }) {
+  const c = a.changes;
+  if (!c) return null;
+  const driverLabel: Record<string, string> = {
+    ODDS_MOVED: "Odds mudaram",
+    NEW_MATCHES: "Jogos novos na amostra",
+    RATINGS_CHANGED: "Forças reestimadas",
+    MODEL_VERSION: "Versão do modelo",
+    CHAMPION_CHANGED: "Campeão trocado",
+    CALIBRATION: "Calibração",
+    NONE: "Sem mudança relevante",
+  };
+  return (
+    <div className="text-xs">
+      <div className="flex flex-wrap items-center gap-1">
+        {c.status === "FIRST_ANALYSIS" ? (
+          <span className="chip bg-gray-100 text-ink-2">PRIMEIRA ANÁLISE</span>
+        ) : (
+          <>
+            {c.drivers.map((d) => (
+              <span key={d} className={clsx("chip", d === "NONE" ? "bg-gray-100 text-ink-2" : d === "ODDS_MOVED" ? "bg-info-50 text-info" : "bg-warning-50 text-warning")}>
+                {driverLabel[d] ?? d}
+              </span>
+            ))}
+            {c.previous_age_hours !== undefined && c.previous_age_hours !== null && <span className="text-ink-3">vs snapshot #{c.previous_snapshot_id} há {c.previous_age_hours} h</span>}
+          </>
+        )}
+      </div>
+      <p className="mt-1 leading-relaxed text-ink-2">{c.text}</p>
+      {c.selections.length > 0 && (
+        <table className="mt-2 w-full">
+          <thead className="text-left text-[10px] font-semibold uppercase tracking-wide text-ink-3">
+            <tr>
+              <th className="py-1">Seleção</th>
+              <th className="text-right">Prob. antes → depois</th>
+              <th className="text-right">Odd</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {c.selections.slice(0, 6).map((s) => (
+              <tr key={s.key} className="border-t border-line/70">
+                <td className="py-1">{s.market_label}: {s.selection_name}</td>
+                <td className="text-right tabular-nums">
+                  {pct(s.prob_before, 1)} → <b>{pct(s.prob_after, 1)}</b> <span className={s.delta_pp >= 0 ? "text-success" : "text-danger"}>({s.delta_pp >= 0 ? "+" : ""}{s.delta_pp.toFixed(1)} pp)</span>
+                </td>
+                <td className="text-right tabular-nums">{s.odd_before ? odd(s.odd_before) : "—"} → {odd(s.odd_after)}</td>
+                <td>{s.state_before ?? "—"} → <b>{s.state_after ?? "—"}</b></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );

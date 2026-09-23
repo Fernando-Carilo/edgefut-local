@@ -6,7 +6,13 @@ import type {
   CalibrationResponse,
   ChatResponse,
   ConflictsResponse,
+  CoverageResponse,
   DashboardResponse,
+  DecayLatestResponse,
+  DriftReport,
+  GovernanceResponse,
+  ReplayLatestResponse,
+  ShadowReport,
   EntriesResponse,
   EventDetailResponse,
   EventListResponse,
@@ -136,4 +142,14 @@ export const api = {
   settings: () => request<SettingsModel>("/settings"),
   saveSettings: (body: SettingsModel) => request<SettingsModel>("/settings", { method: "PUT", body: JSON.stringify(body) }),
   live: (poll = false) => request<LiveResponse>(`/live${qs({ poll })}`),
+
+  // Iteração 3 — validação preditiva (somente leitura, exceto replay/decay que disparam jobs em background)
+  replayLatest: (international = false) => request<ReplayLatestResponse>(`/validation/replay/latest${qs({ international })}`),
+  startReplay: (body: { international?: boolean; start?: string; window_days?: number; scheme?: "expanding" | "rolling" }) =>
+    request<{ ok: boolean; started?: boolean; skipped?: boolean; correlation_id?: string }>("/validation/replay", { method: "POST", body: JSON.stringify(body) }),
+  decayLatest: () => request<DecayLatestResponse>("/validation/decay/latest"),
+  shadow: () => request<ShadowReport>("/validation/shadow"),
+  drift: () => request<DriftReport>("/validation/drift"),
+  coverage: () => request<CoverageResponse>("/validation/coverage"),
+  governance: () => request<GovernanceResponse>("/validation/governance"),
 };

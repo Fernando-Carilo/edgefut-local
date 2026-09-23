@@ -1,5 +1,5 @@
-import type { EvidenceLevel, FreshnessStatus, Grade, HealthStatus, NoBetReason, OpportunityLabel, RecommendationStatus, VenueStatus } from "@edgefut/contracts";
-import { EVIDENCE_LABELS, FRESHNESS_LABELS, HEALTH_LABELS, LABEL_TEXT, NO_BET_LABELS } from "@edgefut/contracts";
+import type { EvidenceLevel, ExposureLevel, FreshnessStatus, Grade, HealthStatus, NoBetReason, OpportunityLabel, RecommendationState, RecommendationStatus, VenueStatus } from "@edgefut/contracts";
+import { EVIDENCE_LABELS, FRESHNESS_LABELS, HEALTH_LABELS, LABEL_TEXT, NO_BET_LABELS, STATE_LABELS } from "@edgefut/contracts";
 import { pct, venueLabel } from "@edgefut/shared";
 import clsx from "clsx";
 import { AlertTriangle, Info, Loader2, ShieldCheck, ShieldOff } from "lucide-react";
@@ -54,18 +54,61 @@ export function HealthDot({ status, className }: { status: HealthStatus | null |
 }
 
 /** SAFE ≠ VALUE: alta probabilidade não implica valor e vice-versa. */
+const LABEL_CLS: Record<OpportunityLabel, string> = {
+  VALUE: "bg-primary-50 text-primary",
+  HIGH_PROBABILITY: "bg-info-50 text-info",
+  MODEL_FAVORITE: "bg-info-50 text-info",
+  HIGH_PROBABILITY_VALUE: "bg-success-50 text-success",
+  VALUE_CANDIDATE: "bg-primary-50/60 text-primary",
+  MODEL_ONLY: "bg-warning-50 text-warning",
+  WATCH: "bg-gray-100 text-ink-2",
+  NO_BET: "bg-gray-100 text-ink-3",
+};
+const LABEL_TIP: Record<OpportunityLabel, string> = {
+  VALUE: "VALUE: passou no quality gate E o mercado tem prova out-of-sample suficiente. Não significa alta probabilidade de acerto.",
+  HIGH_PROBABILITY: "MODEL FAVORITE: probabilidade do modelo alta. Não significa que a odd tenha valor.",
+  MODEL_FAVORITE: "MODEL FAVORITE: probabilidade do modelo alta. Não significa que a odd tenha valor.",
+  HIGH_PROBABILITY_VALUE: "Probabilidade alta E edge positivo ao mesmo tempo.",
+  VALUE_CANDIDATE: "VALUE CANDIDATE: passou no quality gate, mas este mercado ainda não tem prova out-of-sample suficiente (N mínimo configurável).",
+  MODEL_ONLY: "MODEL ONLY: probabilidade calculada, mas sem preço de mercado válido para determinar valor. Nunca vira VALUE nem entra em ROI.",
+  WATCH: "WATCH: edge existe, mas ficou em observação (gate, confiança C, OOS negativa ou preço curto).",
+  NO_BET: "NO BET: sem entrada.",
+};
+
 export function LabelChip({ label }: { label: OpportunityLabel | null | undefined }) {
   if (!label) return null;
-  const cls = label === "VALUE" ? "bg-primary-50 text-primary" : label === "HIGH_PROBABILITY" ? "bg-info-50 text-info" : "bg-success-50 text-success";
-  const tip =
-    label === "VALUE"
-      ? "VALUE: edge/EV acima do limiar. Não significa alta probabilidade de acerto."
-      : label === "HIGH_PROBABILITY"
-        ? "HIGH PROBABILITY: probabilidade do modelo alta. Não significa que a odd tenha valor."
-        : "Probabilidade alta E edge positivo ao mesmo tempo.";
   return (
-    <span className={clsx("chip", cls)} title={tip}>
-      {LABEL_TEXT[label]}
+    <span className={clsx("chip", LABEL_CLS[label] ?? "bg-gray-100 text-ink-2")} title={LABEL_TIP[label]}>
+      {LABEL_TEXT[label] ?? label}
+    </span>
+  );
+}
+
+const STATE_CLS: Record<RecommendationState, string> = {
+  VALUE: "bg-primary-50 text-primary",
+  VALUE_CANDIDATE: "bg-primary-50/60 text-primary",
+  OBSERVATION: "bg-warning-50 text-warning",
+  MODEL_ONLY: "bg-warning-50 text-warning",
+  MARKET_OBSERVED: "bg-gray-100 text-ink-2",
+  NO_BET: "bg-gray-100 text-ink-3",
+};
+
+/** Estado da seleção (§22). MODEL_ONLY nunca é VALUE. */
+export function StateChip({ state, text }: { state: RecommendationState | string | null | undefined; text?: string | null }) {
+  if (!state) return null;
+  return (
+    <span className={clsx("chip", STATE_CLS[state as RecommendationState] ?? "bg-gray-100 text-ink-2")} title={text ?? undefined}>
+      {STATE_LABELS[state as RecommendationState] ?? state}
+    </span>
+  );
+}
+
+export function ExposureChip({ level, note }: { level: ExposureLevel | null | undefined; note?: string }) {
+  if (!level) return null;
+  const cls = level === "HIGH" ? "bg-danger-50 text-danger" : level === "MEDIUM" ? "bg-warning-50 text-warning" : "bg-success-50 text-success";
+  return (
+    <span className={clsx("chip", cls)} title={note ?? "Exposição do evento: quantas teses independentes estão acionáveis. Alternativas da mesma tese não contam."}>
+      EXPOSIÇÃO {level === "HIGH" ? "ALTA" : level === "MEDIUM" ? "MÉDIA" : "BAIXA"}
     </span>
   );
 }

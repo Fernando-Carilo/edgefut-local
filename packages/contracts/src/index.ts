@@ -23,7 +23,20 @@ export type Category = "GOLS" | "RESULTADO" | "ESCANTEIOS" | "CARTOES" | "FINALI
 export type FreshnessStatus = "FRESH" | "AGING" | "STALE" | "EXPIRED" | "UNAVAILABLE";
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "STALE" | "UNAVAILABLE";
 export type MarginMethod = "MULTIPLICATIVE" | "SHIN";
-export type OpportunityLabel = "HIGH_PROBABILITY" | "VALUE" | "HIGH_PROBABILITY_VALUE";
+export type OpportunityLabel =
+  | "HIGH_PROBABILITY"
+  | "VALUE"
+  | "HIGH_PROBABILITY_VALUE"
+  | "MODEL_FAVORITE"
+  | "MODEL_ONLY"
+  | "WATCH"
+  | "VALUE_CANDIDATE"
+  | "NO_BET";
+/** Estado de uma seleção (iteração 3, §22). MODEL_ONLY nunca vira VALUE nem gera ROI. */
+export type RecommendationState = "MODEL_ONLY" | "MARKET_OBSERVED" | "VALUE_CANDIDATE" | "VALUE" | "OBSERVATION" | "NO_BET";
+export type SampleQuality = "INSUFFICIENT" | "EARLY" | "MODERATE" | "STRONG";
+export type Significance = "INSUFFICIENT DATA" | "NO CLEAR ADVANTAGE" | "PROMISING" | "CONSISTENT";
+export type ExposureLevel = "LOW" | "MEDIUM" | "HIGH";
 export type EvidenceLevel = "SETTLED" | "BACKTEST_ODDS" | "MODEL_ONLY";
 export type ConfidenceGroup = "DATA_QUALITY" | "MODEL_AGREEMENT" | "CALIBRATION" | "HISTORICAL_SAMPLE" | "FRESHNESS" | "CONTEXT";
 
@@ -142,6 +155,42 @@ export interface TeamProfile {
   windows: Record<string, WindowStats>;
   sample_size: number;
   provenance: Provenance | null;
+  /** strength-v2: forças ataque/defesa ajustadas por adversário (pooled, média geométrica 1). */
+  ratings_v2: RatingsV2 | null;
+}
+
+export interface RatingsV2 {
+  attack: number;
+  defense: number;
+  home_attack?: number;
+  home_defense?: number;
+  away_attack?: number;
+  away_defense?: number;
+  strength_of_schedule?: number | null;
+  effective_matches?: number;
+  home_advantage?: number | null;
+  model_version?: string;
+  [k: string]: unknown;
+}
+
+/** Price target (§23–25): a que preço a seleção passa a ter margem. */
+export interface PriceTarget {
+  break_even_odd: number;
+  min_acceptable_odd: number | null;
+  min_odd_reason: "edge" | "ev";
+  price_gap_pct?: number;
+  edge_sensitivity_pp?: number;
+  edge_sensitivity?: { prob_minus: { edge_pp: number; ev_pct: number }; prob_plus: { edge_pp: number; ev_pct: number } };
+  edge_survives_minus?: boolean;
+}
+
+export interface OosCheck {
+  n: number;
+  min?: number;
+  verdict?: string;
+  roi_low?: number | null;
+  roi_high?: number | null;
+  source?: string | null;
 }
 
 export interface H2HSummary {
@@ -395,6 +444,57 @@ export interface Recommendation {
   why: string[];
   why_not: string[];
   evidence: EvidenceLevel | null;
+  // Iteração 3
+  state: RecommendationState | null;
+  state_text: string | null;
+  cluster_id: string | null;
+  is_primary: boolean;
+  primary_of: string | null;
+  opportunity_adjustments: Record<string, number> | null;
+  price: PriceTarget | null;
+  oos: OosCheck | null;
+}
+
+/** Cluster de correlação: uma PRIMÁRIA por tese; alternativas (`market|selection|line`) não são oportunidades extra. */
+export interface ClusterView {
+  cluster_id: string;
+  label: string;
+  thesis_group: string;
+  state: RecommendationState | string | null;
+  primary: string | null;
+  alternatives: string[];
+}
+
+export interface ExposureView {
+  level: ExposureLevel;
+  actionable_clusters: string[];
+  correlated_pairs: string[][];
+  note: string;
+}
+
+export interface ModelChanges {
+  status: "FIRST_ANALYSIS" | "COMPARED" | "UNAVAILABLE";
+  previous_snapshot_id: number | null;
+  previous_at?: string | null;
+  previous_age_hours?: number | null;
+  drivers: string[];
+  odds_moved_selections?: number;
+  selections: {
+    key: string;
+    market_label: string;
+    selection_name: string;
+    line: number | null;
+    prob_before: number;
+    prob_after: number;
+    delta_pp: number;
+    odd_before: number | null;
+    odd_after: number;
+    state_before: string | null;
+    state_after: string | null;
+    edge_before: number | null;
+    edge_after: number;
+  }[];
+  text: string;
 }
 
 export interface NoBetVerdict {
@@ -466,6 +566,12 @@ export interface MatchAnalysis {
   quality_gate_passed: boolean;
   evidence: EvidenceLevel | null;
   cache_key: string | null;
+  // Iteração 3
+  clusters: ClusterView[];
+  exposure: ExposureView | null;
+  states: Record<string, number>;
+  champion: string | null;
+  changes: ModelChanges | null;
 }
 
 // ---- API ---------------------------------------------------------------
@@ -553,6 +659,12 @@ export interface RadarItem {
   freshness_status: FreshnessStatus | null;
   evidence: EvidenceLevel | null;
   why: string[];
+  state: RecommendationState | null;
+  cluster_id: string | null;
+  cluster_label: string | null;
+  alternatives: number;
+  exposure: ExposureLevel | null;
+  actionable_clusters: number;
 }
 
 export interface RadarSummary {
@@ -571,6 +683,12 @@ export interface RadarSummary {
   alerts_unread: number;
   no_bet_by_reason: Record<string, number>;
   gate_passed_by_evidence: Partial<Record<EvidenceLevel, number>>;
+  events_by_state: Record<string, number>;
+  value_candidates: number;
+  model_only: number;
+  actionable_clusters: number;
+  selections_actionable: number;
+  exposure_high: number;
 }
 
 export interface RadarCard {
@@ -618,6 +736,48 @@ export interface DashboardResponse {
   no_bet: number;
   alerts_unread: number;
   health_overall: HealthStatus | null;
+  model_health: ModelHealth | null;
+  value: number;
+  value_candidates: number;
+  model_only: number;
+  actionable_clusters: number;
+}
+
+export interface Interval {
+  point: number | null;
+  low: number | null;
+  high: number | null;
+  n: number;
+  conclusive: boolean | null;
+}
+
+export interface ModelHealth {
+  status: "OK" | "WATCH" | "DRIFT" | "UNVALIDATED" | "UNAVAILABLE";
+  generated_at: string;
+  champion?: string;
+  reason?: string;
+  replay?: ModelHealthReplay | null;
+  replay_international?: ModelHealthReplay | null;
+  drift?: { status: string; alerts: number; generated_at: string } | null;
+  settlement?: { settled: number; pending: number; error: number; unclassified: number; unsettled_finished: number; last_reconciliation: string | null };
+  shadow?: { total: number; settled: number; sample_quality: SampleQuality };
+  decay?: { half_life_days: number; selected_by_walk_forward: number | null; tie_with_runner_up: boolean | null; run_id: number | null };
+  notes?: string[];
+}
+
+export interface ModelHealthReplay {
+  run_id: number;
+  created_at: string | null;
+  matches: number;
+  matches_with_odds: number;
+  windows: number;
+  sample_quality: SampleQuality;
+  champion_brier: number | null;
+  market_brier: number | null;
+  vs_market: { significance: Significance | null; lift_pct: number | null; ci: Interval | null };
+  vs_naive: { significance: Significance | null; lift_pct: number | null };
+  ranking_brier: [string, number][] | null;
+  promotion: Record<string, string> | null;
 }
 
 export interface SimulatorRequest {
@@ -916,6 +1076,199 @@ export interface PerformanceResponse {
   model_1x2_all_selections: BacktestMetrics;
   min_sample: number;
   note: string;
+  // Iteração 3 — sem duplicidade
+  selection_vs_cluster: { all_selections: GroupMetrics; primaries_only: GroupMetrics; alternatives_only: GroupMetrics; note: string };
+  by_cluster: Record<string, GroupMetrics>;
+  by_state: Record<string, GroupMetrics>;
+  secondary_markets: Record<string, GroupMetrics & { label: string; verdict: "INSUFFICIENT" | "PROMISING" | "NO CLEAR ADVANTAGE" }>;
+}
+
+export type GroupMetrics = BacktestMetrics & { roi_ci?: Interval | null; sample_quality?: SampleQuality | null; min_sample?: number };
+
+// ---------------------------------------------------------------- Validação (iteração 3)
+
+export interface ReplayModelMetrics {
+  n: number;
+  sample_quality: SampleQuality;
+  brier: Interval;
+  log_loss: Interval;
+  ece: number | null;
+  hit_rate: number | null;
+  avg_p_home?: number | null;
+  avg_p_draw?: number | null;
+  extreme_share?: number | null;
+  ou25?: { n: number; brier: Interval; ece: number | null; avg_p_over: number | null; observed_over_rate: number | null } | null;
+  [k: string]: unknown;
+}
+
+export interface PairedComparison {
+  n: number;
+  brier_model?: number;
+  brier_baseline?: number;
+  lift_pct?: number | null;
+  delta_brier_ci?: Interval;
+  delta_logloss_ci?: Interval;
+  windows_better?: number;
+  windows_total?: number;
+  significance: Significance;
+}
+
+export interface BetSimMetrics {
+  n: number;
+  sample_quality: SampleQuality;
+  roi?: Interval;
+  hit_rate?: Interval;
+  brier?: Interval;
+  avg_odd?: number;
+  avg_edge_pp?: number;
+  avg_model_prob?: number;
+  clv?: Interval | null;
+  profit_units?: number;
+  verdict?: "INCONCLUSIVE" | "POSITIVE" | "NEGATIVE";
+}
+
+export interface ReplayReport {
+  request: Record<string, unknown>;
+  matches: number;
+  matches_with_odds: number;
+  windows: number;
+  datasets: string[];
+  models: string[];
+  baselines: string[];
+  labels: Record<string, string>;
+  overall: Record<string, ReplayModelMetrics>;
+  vs_baseline: Record<string, Record<string, PairedComparison>>;
+  ranking_brier: [string, number][];
+  pairwise: Record<string, { n: number; delta_brier_ci: Interval; delta_logloss_ci: Interval }>;
+  by_dataset: Record<string, { matches: number; models: Record<string, ReplayModelMetrics>; vs_market: Record<string, PairedComparison>; vs_naive: Record<string, PairedComparison> }>;
+  by_group?: Record<string, { matches: number; sample_quality: SampleQuality; brier: Record<string, number>; vs_naive: Record<string, PairedComparison>; vs_market: Record<string, PairedComparison> }>;
+  per_window: { dataset: string; window: number; start: string; end: string; train: number; matches: number; brier: Record<string, number> }[];
+  /** por modelo → { all, by_market, by_selection, by_dataset } (gate simplificado, stake 1) */
+  bets: Record<string, { all: BetSimMetrics; by_market: Record<string, BetSimMetrics>; by_selection: Record<string, BetSimMetrics>; by_dataset: Record<string, BetSimMetrics> }>;
+  limitations: string[];
+  duration_ms: number;
+  generated_at: string;
+  promotion_evaluation?: Record<string, PromotionEvaluation>;
+}
+
+export interface PromotionEvaluation {
+  challenger: string;
+  champion: string;
+  eligible: boolean;
+  verdict: string;
+  checks: Record<string, { ok: boolean; [k: string]: unknown }>;
+  reason?: string;
+  roi_is_not_a_criterion?: boolean;
+}
+
+export interface ReplayLatestResponse {
+  id: number | null;
+  created_at?: string;
+  correlation_id?: string | null;
+  summary?: Record<string, unknown>;
+  detail: ReplayReport | null;
+  running: boolean;
+  labels?: Record<string, string>;
+  models?: string[];
+  baselines?: string[];
+}
+
+export interface DecayLatestResponse {
+  id: number | null;
+  created_at: string | null;
+  detail: {
+    datasets: string[];
+    matches: number;
+    windows: number;
+    window_days: number;
+    candidates: Record<string, { half_life_days: number | null; brier: number; log_loss: number; n: number }>;
+    ranking: [string, number][];
+    best: string;
+    recommended: string;
+    recommended_half_life_days: number | null;
+    tie_with_runner_up: boolean;
+    best_vs_others_delta_brier: Record<string, Interval>;
+    note: string;
+    [k: string]: unknown;
+  } | null;
+  current_half_life_days: number;
+  running: boolean;
+}
+
+export interface ShadowPerf {
+  n: number;
+  sample_quality: SampleQuality;
+  hit_rate?: Interval;
+  brier?: Interval;
+  log_loss?: Interval;
+  roi?: Interval;
+  yield_pct?: number | null;
+  clv?: Interval | null;
+  avg_odd?: number;
+  [k: string]: unknown;
+}
+
+export interface ShadowReport {
+  generated_at: string;
+  day: string;
+  events_observed: number;
+  events_analyzed: number;
+  selections_by_state: Record<string, number>;
+  events_by_state: Record<string, number>;
+  settled_today: number;
+  shadow_rows_total: number;
+  shadow_rows_settled: number;
+  /** janelas 7d / 30d / 90d / all → { priced, value_only, model_only } */
+  performance: Record<string, { priced: ShadowPerf; value_only: ShadowPerf; model_only: ShadowPerf }>;
+  by_market: Record<string, ShadowPerf>;
+  notes: string[];
+}
+
+export interface DriftReport {
+  generated_at: string;
+  status: "INSUFFICIENT DATA" | "STABLE" | "WATCH" | "DRIFT" | string;
+  windows: { recent_days: number; reference_days: number };
+  recent: Record<string, number | null> & { n: number };
+  reference: Record<string, number | null> & { n: number };
+  alerts: { metric: string; recent: number; reference: number; delta: number; threshold: number; severity: "WARN" | "ALERT"; message: string }[];
+  sample_quality: { recent: SampleQuality; reference: SampleQuality };
+  probability_audit: Record<string, unknown> | null;
+  action: string;
+}
+
+export interface CoverageRow {
+  dataset_code: string;
+  competition: string | null;
+  competitions: number;
+  matches: number;
+  first_date: string | null;
+  last_date: string | null;
+  results_pct: number;
+  odds_pct: number;
+  shots_pct: number;
+  corners_pct: number;
+  cards_pct: number;
+  players_pct: number;
+  sample_quality: SampleQuality;
+  value_capable: boolean;
+  source: string | null;
+}
+
+export interface CoverageResponse {
+  generated_at: string;
+  datasets: CoverageRow[];
+  thresholds: Record<string, number>;
+  note: string;
+}
+
+export interface GovernanceResponse {
+  champion: string;
+  consensus_options: string[];
+  roles: { model_id: string; version: string; role: string | null }[];
+  latest_replay_id: number | null;
+  promotion_evaluation: Record<string, PromotionEvaluation> | null;
+  promotions: { id: number; created_at: string; request: Record<string, unknown>; summary: Record<string, unknown> }[];
+  rule: string[];
 }
 
 export interface CalibrationBucket {
@@ -1103,9 +1456,30 @@ export const HEALTH_LABELS: Record<HealthStatus, string> = {
 };
 
 export const LABEL_TEXT: Record<OpportunityLabel, string> = {
-  HIGH_PROBABILITY: "HIGH PROBABILITY",
+  HIGH_PROBABILITY: "MODEL FAVORITE",
   VALUE: "VALUE",
-  HIGH_PROBABILITY_VALUE: "HIGH PROBABILITY + VALUE",
+  HIGH_PROBABILITY_VALUE: "MODEL FAVORITE + VALUE",
+  MODEL_FAVORITE: "MODEL FAVORITE",
+  MODEL_ONLY: "MODEL ONLY",
+  WATCH: "WATCH",
+  VALUE_CANDIDATE: "VALUE CANDIDATE",
+  NO_BET: "NO BET",
+};
+
+export const STATE_LABELS: Record<RecommendationState, string> = {
+  MODEL_ONLY: "MODEL ONLY",
+  MARKET_OBSERVED: "MARKET OBSERVED",
+  VALUE_CANDIDATE: "VALUE CANDIDATE",
+  VALUE: "VALUE",
+  OBSERVATION: "OBSERVATION",
+  NO_BET: "NO BET",
+};
+
+export const SIGNIFICANCE_LABELS: Record<Significance, string> = {
+  "INSUFFICIENT DATA": "INSUFFICIENT DATA",
+  "NO CLEAR ADVANTAGE": "NO CLEAR ADVANTAGE",
+  PROMISING: "PROMISING",
+  CONSISTENT: "CONSISTENT",
 };
 
 export const EVIDENCE_LABELS: Record<EvidenceLevel, string> = {

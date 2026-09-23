@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useUi } from "@/store/ui";
 
-import { DemoChip, EdgeValue, EvidenceChip, GateChip, GradeBadge, LabelChip, NoBetChip, StatusChip, VenueChip } from "./ui";
+import { DemoChip, EdgeValue, EvidenceChip, GateChip, GradeBadge, LabelChip, NoBetChip, StateChip, StatusChip, VenueChip } from "./ui";
 
 export function EventRow({ event, onFavorite }: { event: EventSummary; onFavorite?: (id: number, on: boolean) => void }) {
   const navigate = useNavigate();
@@ -99,9 +99,15 @@ export function RecommendationCard({ event, rec, compact }: { event: EventSummar
         <Mini k="Edge" v={<EdgeValue value={rec.edge_pp} />} />
         {!compact && <Mini k="EV" v={<span className={rec.ev_pct > 0 ? "text-success" : "text-danger"}>{rec.ev_pct > 0 ? "+" : ""}{rec.ev_pct.toFixed(1)}%</span>} />}
       </div>
-      {(rec.label || rec.evidence || rec.quality_gate) && (
+      {(rec.label || rec.evidence || rec.quality_gate || rec.state) && (
         <div className="flex flex-wrap items-center gap-1">
-          <LabelChip label={rec.label} />
+          {rec.state && rec.state !== rec.label ? <StateChip state={rec.state} text={rec.state_text} /> : <LabelChip label={rec.label} />}
+          {rec.label === "MODEL_FAVORITE" && rec.state && rec.state !== "MODEL_ONLY" && <LabelChip label={rec.label} />}
+          {rec.is_primary === false && rec.primary_of && (
+            <span className="chip bg-gray-100 text-ink-2" title={`Alternativa da mesma tese que ${rec.primary_of.replace("|", " · ")} — não é uma oportunidade adicional.`}>
+              ALTERNATIVA
+            </span>
+          )}
           {rec.quality_gate && <GateChip passed={rec.quality_gate.passed} failed={rec.quality_gate.failed} />}
           <EvidenceChip level={rec.evidence} compact />
           {rec.model_prob_calibrated !== null && rec.calibration_reliable && <span className="chip bg-gray-100 text-ink-2">CALIBRADA</span>}
@@ -112,7 +118,13 @@ export function RecommendationCard({ event, rec, compact }: { event: EventSummar
           {rec.why[0]}
         </p>
       )}
-      {rec.status !== "RECOMMENDED" && rec.why_not.length > 0 && (
+      {rec.state === "MODEL_ONLY" && <p className="text-[11px] leading-snug text-warning">Probabilidade calculada, mas sem preço de mercado válido para determinar valor.</p>}
+      {rec.reasons.includes("WATCHING_PRICE") && rec.price?.min_acceptable_odd && (
+        <p className="text-[11px] leading-snug text-warning">
+          Probabilidade interessante, mas preço atual não oferece margem suficiente — odd mínima aceitável {odd(rec.price.min_acceptable_odd)}.
+        </p>
+      )}
+      {rec.status !== "RECOMMENDED" && rec.why_not.length > 0 && rec.state !== "MODEL_ONLY" && !rec.reasons.includes("WATCHING_PRICE") && (
         <p className="line-clamp-2 text-[11px] leading-snug text-warning" title={rec.why_not.join("\n")}>
           {rec.why_not[0]}
         </p>
@@ -120,7 +132,7 @@ export function RecommendationCard({ event, rec, compact }: { event: EventSummar
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <StatusChip status={rec.status} />
-          <span className="text-[11px] text-ink-2" title="Opportunity Score V2 (0–100): pesos configuráveis em Configurações">
+          <span className="text-[11px] text-ink-2" title={`Opportunity Score V3 (0–100)${rec.opportunity_adjustments ? " · ajustes: " + Object.entries(rec.opportunity_adjustments).map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v.toFixed(1)}`).join(", ") : ""}`}>
             Score <b className="tabular-nums">{Math.round(rec.opportunity_score)}</b>
           </span>
         </div>

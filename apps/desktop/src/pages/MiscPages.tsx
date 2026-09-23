@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { BacktestMetrics, CalibrationBucket, LiveEvent, SourceCard as SourceCardT } from "@edgefut/contracts";
+import type { CalibrationBucket, GroupMetrics, LiveEvent, SourceCard as SourceCardT } from "@edgefut/contracts";
 import { fmtDateTime, fmtTime, int, num, odd, parseUtc, pct, relativeTime, signedPct } from "@edgefut/shared";
 import clsx from "clsx";
 import { Database, Eye, Heart, Info, RefreshCw, Zap } from "lucide-react";
@@ -601,6 +601,24 @@ export function PerformancePage() {
           </div>
           <GroupTable title="Por mercado" rows={d.by_market} minSample={d.min_sample} />
           <GroupTable title="Por competição" rows={d.by_competition} minSample={d.min_sample} />
+          {d.selection_vs_cluster && (
+            <GroupTable
+              title="Seleções × primárias (sem duplicidade)"
+              subtitle={d.selection_vs_cluster.note}
+              rows={{ "Todas as seleções recomendadas": d.selection_vs_cluster.all_selections, "Somente primárias (oficial)": d.selection_vs_cluster.primaries_only, "Somente alternativas": d.selection_vs_cluster.alternatives_only }}
+              minSample={d.min_sample}
+            />
+          )}
+          {d.by_cluster && Object.keys(d.by_cluster).length > 0 && <GroupTable title="Por tese (cluster) — só primárias" rows={d.by_cluster} minSample={d.min_sample} />}
+          {d.by_state && Object.keys(d.by_state).length > 0 && <GroupTable title="Por estado no momento da recomendação" subtitle="VALUE exige prova OOS; VALUE_CANDIDATE ainda não tinha. LEGACY = snapshots anteriores à iteração 3." rows={d.by_state} minSample={d.min_sample} />}
+          {d.secondary_markets && Object.keys(d.secondary_markets).length > 0 && (
+            <GroupTable
+              title="Mercados secundários v1 — escanteios, cartões, finalizações"
+              subtitle="Performance do modelo em toda seleção com probabilidade (não só recomendadas). INSUFFICIENT abaixo do mínimo; nunca extrapolamos."
+              rows={Object.fromEntries(Object.values(d.secondary_markets).map((v) => [`${v.label} · ${v.verdict}`, v]))}
+              minSample={d.min_sample}
+            />
+          )}
         </>
       )}
     </div>
@@ -621,11 +639,11 @@ function StatT({ label, value, help, accent }: { label: string; value: React.Rea
   );
 }
 
-function GroupTable({ title, rows, minSample }: { title: string; rows: Record<string, BacktestMetrics>; minSample: number }) {
+function GroupTable({ title, subtitle, rows, minSample }: { title: string; subtitle?: string; rows: Record<string, GroupMetrics>; minSample: number }) {
   const entries = Object.entries(rows).sort((a, b) => b[1].bets - a[1].bets);
   return (
     <Card>
-      <SectionTitle title={title} subtitle={`Grupos com menos de ${minSample} apostas mostram INSUFFICIENT SAMPLE — os números ficam visíveis, mas não sustentam conclusão`} />
+      <SectionTitle title={title} subtitle={subtitle ?? `Grupos com menos de ${minSample} apostas mostram INSUFFICIENT SAMPLE — os números ficam visíveis, mas não sustentam conclusão`} />
       {entries.length === 0 ? (
         <div className="text-sm text-ink-2">Sem dados.</div>
       ) : (
@@ -657,7 +675,10 @@ function GroupTable({ title, rows, minSample }: { title: string; rows: Record<st
                 <td className="text-right tabular-nums">{m.bets}</td>
                 <td className="text-right tabular-nums">{pct(m.hit_rate, 1)}</td>
                 <td className="text-right tabular-nums font-semibold">{num(m.brier, 3)}</td>
-                <td className={clsx("text-right tabular-nums", m.sample_status !== "INSUFFICIENT_SAMPLE" && ((m.roi ?? 0) >= 0 ? "text-success" : "text-danger"))}>{signedPct(m.roi)}</td>
+                <td className={clsx("text-right tabular-nums", m.sample_status !== "INSUFFICIENT_SAMPLE" && ((m.roi ?? 0) >= 0 ? "text-success" : "text-danger"))} title={m.roi_ci && m.roi_ci.low !== null && m.roi_ci.high !== null ? `IC 95% bootstrap [${m.roi_ci.low.toFixed(1)}%, ${m.roi_ci.high.toFixed(1)}%]${m.roi_ci.conclusive ? "" : " — cruza zero: INCONCLUSIVE"}` : "IC indisponível (< 10 apostas)"}>
+                  {signedPct(m.roi)}
+                  {m.roi_ci && m.roi_ci.low !== null && m.roi_ci.high !== null && <span className="block text-[10px] text-ink-3">[{m.roi_ci.low.toFixed(0)}, {m.roi_ci.high.toFixed(0)}]</span>}
+                </td>
                 <td className="text-right tabular-nums">{signedPct(m.clv_pct)}</td>
                 <td className="text-right tabular-nums">{odd(m.avg_odd)}</td>
                 <td>{m.sample_status === "INSUFFICIENT_SAMPLE" ? <span className="chip bg-warning-50 text-warning">INSUFFICIENT SAMPLE</span> : <span className="chip bg-success-50 text-success">OK</span>}</td>
