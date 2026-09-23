@@ -83,6 +83,13 @@ class SuperbetProvider:
             f"&startDate={start.strftime(fmt)}&endDate={end.strftime(fmt)}&sportId={SPORT_FOOTBALL}"
         )
 
+    def live_events_url(self, start: datetime, end: datetime) -> str:
+        fmt = "%Y-%m-%d+%H:%M:%S"
+        return (
+            f"{self.base}/events/by-date?offerState=live"
+            f"&startDate={start.strftime(fmt)}&endDate={end.strftime(fmt)}&sportId={SPORT_FOOTBALL}"
+        )
+
     def event_url(self, event_id: int) -> str:
         return f"{self.base}/events/{event_id}"
 
@@ -121,9 +128,31 @@ class SuperbetProvider:
             events.append(ev)
         return events, res
 
-    def fetch_event(self, event_id: int, force: bool = False) -> SuperbetEvent:
+    def fetch_live_events(self, *, ttl_s: float = 20) -> tuple[list[SuperbetEvent], FetchResult]:
+        """Eventos em andamento (offerState=live). Só observação: o payload de lista traz
+        apenas o mercado principal; `fetch_event` traz os mercados completos."""
+        now = datetime.utcnow()
+        start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=5)
+        end = start + timedelta(hours=8)
+        url = self.live_events_url(start, end)
+        res = self.http.get(url, provider=PROVIDER, ttl_s=ttl_s, min_interval_s=2.0)
+        payload = res.json()
+        if payload.get("error"):
+            raise SourceError(f"superbet respondeu error=true para {url}")
+        events: list[SuperbetEvent] = []
+        for raw in payload.get("data", []):
+            meta = raw.get("metadata") or {}
+            if str(meta.get("status") or "").upper() != "STARTED":
+                continue
+            try:
+                events.append(self._parse_event(raw, res))
+            except Exception as exc:  # noqa: BLE001
+                log.debug("evento ao vivo ignorado (%s): %s", exc, raw.get("eventId"))
+        return events, res
+
+    def fetch_event(self, event_id: int, force: bool = False, ttl_s: float = 240) -> SuperbetEvent:
         url = self.event_url(event_id)
-        res = self.http.get(url, provider=PROVIDER, ttl_s=240, min_interval_s=2.0, force=force)
+        res = self.http.get(url, provider=PROVIDER, ttl_s=ttl_s, min_interval_s=2.0, force=force)
         payload = res.json()
         data = payload.get("data")
         if not data:

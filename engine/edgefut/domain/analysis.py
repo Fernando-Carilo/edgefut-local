@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .conflicts import ConflictOut
+from .freshness import Freshness, FreshnessStatus
 from .provenance import Provenance, SourceAttempt
 
 VenueStatus = Literal["CONFIRMED_HOME", "NEUTRAL", "UNCONFIRMED"]
@@ -22,6 +24,8 @@ NoBetReason = Literal[
     "LINEUP_UNCERTAINTY",
     "EXTREME_ODDS_MOVEMENT",
     "UNSUPPORTED_COMPETITION",
+    "STALE_DATA",
+    "QUALITY_GATE",
 ]
 
 
@@ -106,6 +110,7 @@ class VenueInfo(BaseModel):
     confidence: float = 0.0
     note: str | None = None
     home_advantage_weight: float = 1.0  # 1 confirmado, 0 neutro, 0.5 não confirmado
+    listing_swapped: bool = False  # fonte histórica lista o mandante invertido em relação à Superbet
 
 
 class GoalsModelOutput(BaseModel):
@@ -316,3 +321,9 @@ class MatchAnalysis(BaseModel):
     source_attempts: list[SourceAttempt]
     snapshot_id: int | None = None
     warnings: list[str] = Field(default_factory=list)
+    # Iteração 2 — confiança nos dados
+    freshness: list[Freshness] = Field(default_factory=list)
+    freshness_status: FreshnessStatus | None = None  # pior status entre odds/forma/histórico
+    conflicts: list[ConflictOut] = Field(default_factory=list)
+    conflicts_count: int = 0
+    canonical_event_id: str | None = None

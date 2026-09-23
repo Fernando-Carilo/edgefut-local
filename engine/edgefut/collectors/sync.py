@@ -13,9 +13,12 @@ from sqlalchemy.orm import Session
 
 from ..db.models import Competition, Event, OddsSnapshot, SourceLog
 from ..db.session import session_scope
-from ..normalization import classify_competition, is_womens
+from ..normalization import TeamMatch, classify_competition, is_womens
+from ..normalization.identity import CanonicalEventResolver, EventIdentity, canonical_event_id, canonical_team_key
 from ..providers import SourceBlocked, SourceError, get_http_client
+from ..providers.historical import get_store
 from ..providers.superbet import SuperbetEvent, SuperbetProvider
+from ..quality.conflicts import record_conflict
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +80,78 @@ def flush_source_log(timeout: float = 5.0) -> None:
         time.sleep(0.05)
 
 
+class IdentityAssigner:
+    """Atribui `canonical_event_id` a cada evento e marca duplicatas dentro da mesma coleta."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.resolver = CanonicalEventResolver()
+        self._candidates: dict[str, list[str]] = {}
+        self._store = get_store()
+
+    def _team_candidates(self, code: str) -> list[str]:
+        if code not in self._candidates:
+            try:
+                self._candidates[code] = self._store.team_names([code])
+            except Exception:  # noqa: BLE001
+                self._candidates[code] = []
+        return self._candidates[code]
+
+    def identity(self, row: Event, comp: Competition | None) -> EventIdentity:
+        profile = classify_competition(
+            row.competition_id, row.competition_name, comp.category_id if comp else None, row.category_name,
+            womens_hint=is_womens(row.home_name) or is_womens(row.away_name),
+        )
+        code = profile.dataset_codes[0] if profile.dataset_codes and not profile.is_international_clubs else None
+        if profile.is_national_teams:
+            home = canonical_team_key(row.home_name, is_national=True)
+            away = canonical_team_key(row.away_name, is_national=True)
+        elif code:
+            cands = self._team_candidates(code)
+            home = canonical_team_key(row.home_name, is_national=False, dataset_code=code, candidates=cands)
+            away = canonical_team_key(row.away_name, is_national=False, dataset_code=code, candidates=cands)
+        else:
+            home = TeamMatch(row.home_name, None, None, 0.0, "unmatched")
+            away = TeamMatch(row.away_name, None, None, 0.0, "unmatched")
+        return EventIdentity(
+            source="superbet", source_event_id=str(row.id), kickoff_utc=row.kickoff_utc, home=home, away=away,
+            competition=row.competition_name, dataset_code=code,
+        )
+
+    def assign(self, row: Event, comp: Competition | None) -> bool:
+        """Devolve True quando o evento foi marcado como duplicata de outro."""
+        ident = self.identity(row, comp)
+        if ident.resolved:
+            row.home_canonical, row.away_canonical = ident.home.canonical, ident.away.canonical
+            row.canonical_event_id = ident.canonical_id
+        else:
+            row.home_canonical = row.away_canonical = None
+            row.canonical_event_id = canonical_event_id(row.kickoff_utc, row.competition_name, row.home_name, row.away_name)
+        if not ident.strong:
+            return False
+        lo, hi = row.kickoff_utc - self.resolver.tolerance, row.kickoff_utc + self.resolver.tolerance
+        others = self.session.execute(
+            select(Event).where(
+                Event.canonical_event_id == row.canonical_event_id, Event.id != row.id,
+                Event.kickoff_utc >= lo, Event.kickoff_utc <= hi, Event.duplicate_of.is_(None),
+            )
+        ).scalars().all()
+        primary = next((o for o in others if o.first_seen_at <= row.first_seen_at and o.id != row.id), None)
+        if primary is None:
+            row.duplicate_of = None
+            return False
+        if row.duplicate_of != primary.id:
+            row.duplicate_of = primary.id
+            record_conflict(
+                self.session, event_id=row.id, canonical_event_id=row.canonical_event_id, field="competition",
+                source_a="superbet", value_a={"event_id": primary.id, "competition": primary.competition_name},
+                source_b="superbet", value_b={"event_id": row.id, "competition": row.competition_name},
+                selected_value={"event_id": primary.id}, selected_source="superbet", method="canonical_teams",
+                confidence=0.9,
+            )
+        return True
+
+
 class SuperbetSync:
     def __init__(self, provider: SuperbetProvider | None = None) -> None:
         self.provider = provider or SuperbetProvider()
@@ -102,6 +177,8 @@ class SuperbetSync:
         tours = self.tournaments()
         now = datetime.utcnow()
         n_new = 0
+        duplicates = 0
+        identities = IdentityAssigner(session)
         for ev in events:
             comp = self._upsert_competition(session, ev, tours)
             row = session.get(Event, ev.event_id)
@@ -124,8 +201,10 @@ class SuperbetSync:
             row.last_seen_at = now
             row.raw = ev.raw
             row.event_url = self.provider.public_event_link(ev, row.category_name, row.competition_name)
+            if identities.assign(row, comp):
+                duplicates += 1
         session.flush()
-        return {"ok": True, "blocked": False, "events": len(events), "new": n_new, "source": res.status, "url": res.url}
+        return {"ok": True, "blocked": False, "events": len(events), "new": n_new, "duplicates": duplicates, "source": res.status, "url": res.url}
 
     def _upsert_competition(self, session: Session, ev: SuperbetEvent, tours: dict[int, dict]) -> Competition | None:
         if ev.tournament_id is None:
@@ -171,18 +250,21 @@ class SuperbetSync:
             )
             session.add(row)
             row.event_url = self.provider.public_event_link(ev, row.category_name, row.competition_name)
+            IdentityAssigner(session).assign(row, comp)
         row.status = ev.status
         row.market_count = ev.market_count
         row.last_seen_at = datetime.utcnow()
         meta = ev.raw.get("metadata") or {}
         if meta.get("status") == "FINISHED" and meta.get("homeTeamScore") is not None:
+            # Guarda o placar, mas NÃO marca settled_at: a liquidação dos snapshots
+            # (settle_pending) é quem fecha o evento, comparando fontes.
             try:
                 row.home_score = int(meta["homeTeamScore"])
                 row.away_score = int(meta["awayTeamScore"])
                 row.result_source = "superbet"
-                row.settled_at = row.settled_at or datetime.utcnow()
             except (TypeError, ValueError):
                 pass
+        self._update_live(row, ev)
 
         collected = ev.collected_at or datetime.utcnow()
         # evita duplicar snapshot idêntico ao último (economiza espaço, preserva histórico real)
@@ -203,6 +285,29 @@ class SuperbetSync:
         row.odds_collected_at = collected
         session.flush()
         return {"ok": True, "skipped": False, "odds": n, "total": len(ev.odds), "source": "cached" if n == 0 else "ok"}
+
+    @staticmethod
+    def _update_live(row: Event, ev: SuperbetEvent) -> None:
+        """Placar/minuto ao vivo quando a Superbet os expõe (metadata.status=STARTED,
+        metadata.minutes, metadata.periodStatus); nunca inventa valores ausentes."""
+        meta = ev.raw.get("metadata") or {}
+        status = str(meta.get("status") or "").upper()
+        if status == "STARTED":
+            row.live_status = str(meta.get("periodStatus") or "live").lower()
+            row.live_collected_at = ev.collected_at or datetime.utcnow()
+            for src, dst in (("homeTeamScore", "live_home_score"), ("awayTeamScore", "live_away_score")):
+                try:
+                    setattr(row, dst, int(meta[src]) if meta.get(src) is not None else None)
+                except (TypeError, ValueError):
+                    setattr(row, dst, None)
+            minute = meta.get("minutes") or meta.get("minute") or meta.get("matchMinute")
+            try:
+                row.live_minute = int(str(minute).rstrip("'")) if minute is not None else None
+            except (TypeError, ValueError):
+                row.live_minute = None
+        elif status == "FINISHED":
+            row.live_status = "finished"
+            row.live_collected_at = ev.collected_at or datetime.utcnow()
 
     def _latest_prices(self, session: Session, event_id: int) -> dict[tuple, float]:
         sub = (

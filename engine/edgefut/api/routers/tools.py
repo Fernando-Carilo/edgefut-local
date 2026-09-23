@@ -149,7 +149,7 @@ def chat(body: ChatRequest, session: Session = Depends(get_session)):
 def search(q: str = Query(min_length=2), session: Session = Depends(get_session)):
     like = f"%{q}%"
     rows = session.execute(
-        select(Event).where(Event.kickoff_utc > datetime.utcnow(), or_(Event.home_name.ilike(like), Event.away_name.ilike(like), Event.competition_name.ilike(like)))
+        select(Event).where(Event.kickoff_utc > datetime.utcnow(), Event.duplicate_of.is_(None), or_(Event.home_name.ilike(like), Event.away_name.ilike(like), Event.competition_name.ilike(like)))
         .order_by(Event.kickoff_utc.asc()).limit(20)
     ).scalars().all()
     odds = main_odds_for(session, [r.id for r in rows])

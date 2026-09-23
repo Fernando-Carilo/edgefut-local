@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...core import versions
 from ...core.config import settings
 from ...core.paths import get_paths
-from ...db.models import Competition, DatasetState, Setting, SourceLog
+from ...db.models import Competition, DatasetState, JobRun, Setting, SourceLog
 from ...db.session import get_session
 from ...explanations import ollama
 from ...providers import get_http_client
@@ -53,6 +54,87 @@ def health():
         scheduler={k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in st.items()},
         superbet_enabled=settings.superbet_enabled, ollama_available=ollama.is_available(),
     )
+
+
+@router.get("/health/system")
+def health_system(session: Session = Depends(get_session)):
+    """Diagnóstico por componente: HEALTHY / DEGRADED / UNAVAILABLE / STALE."""
+    from ...quality.health import system_health
+
+    return system_health(session)
+
+
+@router.get("/jobs")
+def jobs_history(limit: int = Query(100, le=500), job: str | None = None, session: Session = Depends(get_session)):
+    q = select(JobRun).order_by(JobRun.started_at.desc()).limit(limit)
+    if job:
+        q = q.where(JobRun.job == job)
+    runs = session.execute(q).scalars().all()
+    last_by_job: dict[str, dict] = {}
+    for r in reversed(runs):
+        last_by_job[r.job] = _job_run(r)
+    return {
+        "generated_at": datetime.utcnow(),
+        "scheduler_running": jobs.is_running(),
+        "scheduled": jobs.jobs_overview(),
+        "labels": jobs.JOB_LABELS,
+        "last_by_job": last_by_job,
+        "runs": [_job_run(r) for r in runs],
+        "state": {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in jobs.state().items()},
+    }
+
+
+def _job_run(r: JobRun) -> dict:
+    return {
+        "id": r.id, "job": r.job, "label": jobs.JOB_LABELS.get(r.job, r.job), "correlation_id": r.correlation_id,
+        "started_at": r.started_at, "finished_at": r.finished_at, "duration_ms": r.duration_ms, "status": r.status,
+        "records_processed": r.records_processed, "errors": r.errors, "detail": r.detail,
+    }
+
+
+@router.post("/jobs/{job}/run")
+def jobs_run(job: str):
+    fn = {
+        "events": jobs.job_sync_events, "odds": jobs.job_sync_odds, "history": jobs.job_sync_history, "settle": jobs.job_settle,
+        "radar": jobs.job_refresh_radar, "closing_lines": jobs.job_closing_lines, "performance": jobs.job_update_performance,
+        "calibration": jobs.job_update_calibration, "cache_cleanup": jobs.job_cache_cleanup, "alerts": jobs.job_alerts,
+        "live_poll": jobs.job_live_poll,
+    }.get(job)
+    if fn is None:
+        return JSONResponse(status_code=404, content={"detail": f"job desconhecido: {job}"})
+    jobs.run_in_background(fn)
+    return {"ok": True, "started": job, "background": True}
+
+
+@router.get("/alerts")
+def alerts(limit: int = Query(100, le=500), unread_only: bool = False, session: Session = Depends(get_session)):
+    from ...alerts import KINDS, list_alerts
+
+    items = list_alerts(session, limit=limit, unread_only=unread_only)
+    return {"generated_at": datetime.utcnow(), "kinds": KINDS, "unread": sum(1 for a in items if a["read_at"] is None), "alerts": items}
+
+
+@router.post("/alerts/read")
+def alerts_read(ids: list[int] | None = None, session: Session = Depends(get_session)):
+    from ...alerts import mark_read
+
+    return {"ok": True, "marked": mark_read(session, ids)}
+
+
+@router.get("/calibration")
+def calibration(market_key: str | None = None, session: Session = Depends(get_session)):
+    from ...models.calibration import MIN_CALIBRATION_N, calibration_overview, reliability_diagram
+
+    return {
+        "generated_at": datetime.utcnow(),
+        "min_n": MIN_CALIBRATION_N,
+        "groups": calibration_overview(session),
+        "diagram": reliability_diagram(session, market_key),
+        "note": (
+            "Calibração isotônica ajustada apenas sobre previsões gravadas antes do jogo e liquidadas. "
+            f"Grupos com menos de {MIN_CALIBRATION_N} previsões não são usados na recomendação (probabilidade crua)."
+        ),
+    }
 
 
 @router.get("/bootstrap", response_model=BootstrapStatus)
@@ -166,15 +248,20 @@ def sources(session: Session = Depends(get_session), log_limit: int = Query(50, 
 
 
 @router.post("/sources/refresh")
-def sources_refresh(what: str = Query("events", pattern="^(events|odds|history|settle|radar)$"), force: bool = False):
+def sources_refresh(what: str = Query("events", pattern="^(events|odds|history|settle|radar|closing_lines|performance|calibration|alerts|live_poll)$"), force: bool = False):
     fn = {
         "events": jobs.job_sync_events,
         "odds": jobs.job_sync_odds,
         "history": lambda: jobs.job_sync_history(force=force),
         "settle": jobs.job_settle,
         "radar": jobs.job_refresh_radar,
+        "closing_lines": jobs.job_closing_lines,
+        "performance": jobs.job_update_performance,
+        "calibration": jobs.job_update_calibration,
+        "alerts": jobs.job_alerts,
+        "live_poll": jobs.job_live_poll,
     }[what]
-    if what in ("history", "radar"):
+    if what in ("history", "radar", "performance", "calibration"):
         jobs.run_in_background(fn)
         return {"ok": True, "started": what, "background": True}
     return {"ok": True, "started": what, "background": False, "result": fn()}
@@ -259,9 +346,10 @@ def put_settings(model: SettingsModel, session: Session = Depends(get_session)):
 
 
 @router.get("/live")
-def live():
-    return {
-        "available": False,
-        "events": [],
-        "reason": "Odds ao vivo não estão disponíveis via fonte pública estável nesta versão. Nenhum dado é simulado; a tela permanece vazia até que um provider ao vivo confiável seja integrado.",
-    }
+def live(poll: bool = False):
+    """Jogos em andamento (Superbet offerState=live). Observação apenas — sem recomendações."""
+    from ...collectors.live import live_snapshot, poll_live
+
+    if poll:
+        poll_live(force=True)
+    return live_snapshot()

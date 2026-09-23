@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     odds_refresh_min: int = 5
     history_refresh_hours: int = 24
     scheduler_enabled: bool = True
+    live_poll_seconds: int = 30
+    prematch_poll_seconds: int = 300
+
+    # Odds
+    margin_method: str = "MULTIPLICATIVE"  # MULTIPLICATIVE | SHIN
 
     # Modelos
     default_simulations: int = 50_000

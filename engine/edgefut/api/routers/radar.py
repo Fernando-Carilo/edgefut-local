@@ -138,7 +138,7 @@ def dashboard(session: Session = Depends(get_session)):
     top.sort(key=lambda x: -x.recommendation.opportunity_score)
     now = datetime.utcnow()
     popular_rows = session.execute(
-        select(Event).where(Event.kickoff_utc > now - timedelta(hours=2), Event.kickoff_utc < now + timedelta(hours=48))
+        select(Event).where(Event.kickoff_utc > now - timedelta(hours=2), Event.kickoff_utc < now + timedelta(hours=48), Event.duplicate_of.is_(None))
         .order_by(Event.market_count.desc()).limit(8)
     ).scalars().all()
     odds = main_odds_for(session, [r.id for r in popular_rows])

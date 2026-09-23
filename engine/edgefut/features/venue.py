@@ -50,6 +50,13 @@ def resolve_venue(
                         source="international_results", confidence=0.95,
                         note="Dataset confirma o mandante.", home_advantage_weight=1.0,
                     )
+                # dataset lista o mandante invertido em relação à Superbet: não assumimos nenhum dos dois
+                return VenueInfo(
+                    status="UNCONFIRMED", neutral=False, city=_s(r.get("city")), country=_s(r.get("country")),
+                    source="international_results", confidence=0.5, listing_swapped=True,
+                    note="Dataset registra o mando invertido em relação à listagem da Superbet; vantagem de mandante reduzida.",
+                    home_advantage_weight=settings.home_advantage_unconfirmed_weight,
+                )
         return VenueInfo(
             status="UNCONFIRMED",
             neutral=None,

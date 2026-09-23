@@ -69,6 +69,17 @@ class Event(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     odds_collected_at: Mapped[datetime | None] = mapped_column(DateTime)
     raw: Mapped[dict | None] = mapped_column(JSON)
+    # identidade canônica (CanonicalEventResolver)
+    canonical_event_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    home_canonical: Mapped[str | None] = mapped_column(String(120))
+    away_canonical: Mapped[str | None] = mapped_column(String(120))
+    duplicate_of: Mapped[int | None] = mapped_column(Integer)  # eventId principal quando esta linha é duplicata
+    # ao vivo (observação)
+    live_status: Mapped[str | None] = mapped_column(String(24))
+    live_minute: Mapped[int | None] = mapped_column(Integer)
+    live_home_score: Mapped[int | None] = mapped_column(Integer)
+    live_away_score: Mapped[int | None] = mapped_column(Integer)
+    live_collected_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class OddsSnapshot(Base):
@@ -125,6 +136,129 @@ class PredictionSnapshot(Base):
     # settlement — nunca altera os campos acima
     result: Mapped[dict | None] = mapped_column(JSON)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # closing line (gravada após o kickoff) — usada só para CLV, nunca para recomendar
+    closing_odds: Mapped[dict | None] = mapped_column(JSON)
+
+
+PREDICTION_FIELDS = frozenset(
+    {
+        "event_id", "created_at", "kickoff_utc", "home_name", "away_name", "competition_name", "model_version",
+        "model_versions", "features", "probabilities", "odds", "recommendations", "confidence_grade", "data_quality",
+        "no_bet_reason",
+    }
+)
+
+
+class SnapshotCorrection(Base):
+    """Correções de resultado geram evento; a previsão em si nunca é alterada."""
+
+    __tablename__ = "snapshot_correction"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("prediction_snapshot.id"), index=True)
+    field: Mapped[str] = mapped_column(String(40))
+    old_value: Mapped[dict | None] = mapped_column(JSON)
+    new_value: Mapped[dict | None] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(String(200))
+    source: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ClosingLine(Base):
+    """Última odd observada antes do kickoff, por seleção."""
+
+    __tablename__ = "closing_line"
+    __table_args__ = (UniqueConstraint("event_id", "market_key", "selection_key", "line", name="uq_closing_sel"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id"), index=True)
+    market_key: Mapped[str] = mapped_column(String(40))
+    selection_key: Mapped[str] = mapped_column(String(80))
+    line: Mapped[float | None] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    collected_at: Mapped[datetime] = mapped_column(DateTime)
+    kickoff_utc: Mapped[datetime] = mapped_column(DateTime)
+    minutes_before_kickoff: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SourceConflict(Base):
+    __tablename__ = "source_conflict"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id"), index=True)
+    canonical_event_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    field: Mapped[str] = mapped_column(String(40))
+    source_a: Mapped[str] = mapped_column(String(64))
+    value_a: Mapped[dict | None] = mapped_column(JSON)
+    source_b: Mapped[str] = mapped_column(String(64))
+    value_b: Mapped[dict | None] = mapped_column(JSON)
+    selected_value: Mapped[dict | None] = mapped_column(JSON)
+    selected_source: Mapped[str | None] = mapped_column(String(64))
+    resolution_method: Mapped[str] = mapped_column(String(64))
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ModelRegistry(Base):
+    __tablename__ = "model_registry"
+    __table_args__ = (UniqueConstraint("model_id", "version", name="uq_model_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_id: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    training_window: Mapped[dict | None] = mapped_column(JSON)
+    features: Mapped[list | None] = mapped_column(JSON)
+    parameters: Mapped[dict | None] = mapped_column(JSON)
+    metrics: Mapped[dict | None] = mapped_column(JSON)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    deprecated: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class CalibrationModel(Base):
+    """Calibração isotônica por grupo (mercado × grupo de competição/modelo)."""
+
+    __tablename__ = "calibration_model"
+
+    group_key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    method: Mapped[str] = mapped_column(String(24), default="isotonic")
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    thresholds: Mapped[list] = mapped_column(JSON)  # x (probabilidade crua)
+    values: Mapped[list] = mapped_column(JSON)  # y (frequência calibrada)
+    brier_raw: Mapped[float | None] = mapped_column(Float)
+    brier_calibrated: Mapped[float | None] = mapped_column(Float)
+    reliable: Mapped[bool] = mapped_column(Boolean, default=False)
+    fitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class JobRun(Base):
+    __tablename__ = "job_run"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job: Mapped[str] = mapped_column(String(48), index=True)
+    correlation_id: Mapped[str] = mapped_column(String(36))
+    started_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | ok | error | skipped
+    records_processed: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[list | None] = mapped_column(JSON)
+    detail: Mapped[dict | None] = mapped_column(JSON)
+
+
+class Alert(Base):
+    __tablename__ = "alert"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(40), index=True)  # ODD_MOVEMENT | DATA_QUALITY_CHANGE | ...
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    detail: Mapped[dict | None] = mapped_column(JSON)
+    severity: Mapped[str] = mapped_column(String(12), default="info")  # info | warning
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class SourceLog(Base):

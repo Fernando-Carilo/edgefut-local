@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..collectors import SuperbetSync, latest_odds_rows
+from ..collectors.sync import IdentityAssigner
 from ..core import versions
 from ..core.config import settings
 from ..db.models import Competition, Event, Favorite, PredictionSnapshot
@@ -25,6 +26,7 @@ from ..domain.analysis import (
     TeamProfile,
     VenueInfo,
 )
+from ..domain import freshness as fresh
 from ..domain.provenance import Provenance, SourceAttempt
 from ..explanations import explain, explain_recommendation
 from ..features.data_quality import compute_data_quality
@@ -47,6 +49,7 @@ from ..normalization import CompetitionProfile, classify_competition, is_womens
 from ..odds import build_markets
 from ..providers import SourceResolver
 from ..providers.historical import get_store
+from ..quality import conflicts_for_event, record_conflict
 from ..recommendations import compute_confidence, evaluate
 from ..simulation.monte_carlo import simulate
 
@@ -183,6 +186,10 @@ def analyze_event(
         attempts.append(SourceAttempt(provider="superbet", status="cached" if odds_status.get("skipped") else "ok"))
 
     profile = _profile_for(session, row)
+    if row.canonical_event_id is None:
+        # evento visto antes da migração v2 ou fora da última janela de sync
+        IdentityAssigner(session).assign(row, session.get(Competition, row.competition_id) if row.competition_id else None)
+        session.commit()
     resolver = SourceResolver()
     resolved = resolver.resolve(profile, row.home_name, row.away_name)
     attempts.extend(resolved.attempts)
@@ -204,10 +211,15 @@ def analyze_event(
             status=row.venue_status, neutral=row.neutral_venue, name=row.venue_name, city=row.venue_city,  # type: ignore[arg-type]
             country=row.venue_country, source="user", confidence=1.0, note="Definido manualmente pelo usuário.",
         )
+    detected_venue = resolve_venue(
+        profile=profile, home_canonical=resolved.home.canonical, away_canonical=resolved.away.canonical,
+        kickoff=row.kickoff_utc, store=store, override=None,
+    )
     venue = resolve_venue(
         profile=profile, home_canonical=resolved.home.canonical, away_canonical=resolved.away.canonical,
         kickoff=row.kickoff_utc, store=store, override=override,
-    )
+    ) if override is not None else detected_venue
+    _record_venue_conflicts(session, row, detected_venue, venue)
     if row.venue_source != "user":
         row.venue_status = venue.status
         row.neutral_venue = venue.neutral
@@ -273,6 +285,19 @@ def analyze_event(
     markets = build_markets(rows, opening, collected_at, odds_url)
     has_1x2 = any(m.market_key == "1X2" for m in markets)
 
+    # ---- freshness (nunca usar dado EXPIRED silenciosamente) ---------------------
+    freshness = _freshness(collected_at, home, away, comp_df, venue, bool(markets))
+    freshness_status = fresh.worst(freshness, {"odds", "form", "history"})
+    stale_reason: str | None = None
+    odds_f = next((f for f in freshness if f.kind == "odds"), None)
+    hist_f = next((f for f in freshness if f.kind == "history"), None)
+    if odds_f is not None and odds_f.status == "EXPIRED":
+        stale_reason = f"Odds coletadas {fresh.describe_age(odds_f.age_seconds)} (limite {odds_f.valid_until:%d/%m %H:%M} UTC); Superbet indisponível para atualizar."
+    elif hist_f is not None and hist_f.status == "EXPIRED":
+        stale_reason = f"Histórico atualizado {fresh.describe_age(hist_f.age_seconds)}; acima do limite de validade."
+    if stale_reason:
+        warnings.append(f"STALE_DATA: {stale_reason}")
+
     # ---- qualidade / confiança ---------------------------------------------------
     dq = compute_data_quality(
         home=home, away=away, venue=venue, odds_collected_at=collected_at, has_1x2=has_1x2,
@@ -290,6 +315,7 @@ def analyze_event(
         markets=markets, sim=sim, corners=corners, cards=cards, confidence=conf, data_quality=dq,
         supported=profile.supported, teams_resolved=resolved.ok, min_sample=min(home.sample_size, away.sample_size),
         model_disagreement_pp=disagreement, unreliable_source=unreliable, market_calibration=calibration,
+        stale_data=stale_reason,
     )
     if not profile.supported and profile.reason:
         warnings.append(profile.reason)
@@ -299,6 +325,9 @@ def analyze_event(
         warnings.append(f"Time não identificado no dataset: {row.away_name}")
 
     opp = max([r.opportunity_score for r in recs if r.status in ("RECOMMENDED", "WATCH")], default=0.0)
+
+    session.flush()
+    conflicts = conflicts_for_event(session, event_id)
 
     sources: list[Provenance] = []
     if markets:
@@ -338,6 +367,11 @@ def analyze_event(
         sources=sources,
         source_attempts=attempts,
         warnings=warnings,
+        freshness=freshness,
+        freshness_status=freshness_status,
+        conflicts=conflicts,
+        conflicts_count=len(conflicts),
+        canonical_event_id=row.canonical_event_id,
     )
     analysis.explanation = explain(analysis)
     for r in analysis.recommendations:
@@ -357,6 +391,61 @@ def analyze_event(
     with _cache_lock:
         _cache[event_id] = (datetime.utcnow(), analysis)
     return analysis
+
+
+def _freshness(odds_collected_at, home: TeamProfile, away: TeamProfile, comp_df: pd.DataFrame, venue: VenueInfo, has_odds: bool) -> list[fresh.Freshness]:
+    out: list[fresh.Freshness] = []
+    if has_odds or odds_collected_at is not None:
+        out.append(fresh.assess("odds", odds_collected_at, source="superbet"))
+    else:
+        out.append(fresh.unavailable("odds", "Superbet não retornou mercados para este evento."))
+    for side, t in (("mandante", home), ("visitante", away)):
+        if t.provenance and t.provenance.collected_at:
+            out.append(fresh.assess("form", t.provenance.collected_at, source=t.provenance.source, note=f"Forma do {side} ({t.sample_size} jogos)."))
+        else:
+            out.append(fresh.unavailable("form", f"Sem histórico resolvido para o {side}."))
+    hist_at = None
+    if comp_df is not None and not comp_df.empty and "collected_at" in comp_df and comp_df["collected_at"].notna().any():
+        ts = comp_df["collected_at"].max()
+        hist_at = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+    if hist_at is not None:
+        out.append(fresh.assess("history", hist_at, source=str(comp_df["source"].iloc[0]) if "source" in comp_df else "historical", note=f"{len(comp_df)} jogos da competição."))
+    else:
+        out.append(fresh.unavailable("history", "Competição sem dataset histórico carregado."))
+    if venue.source in ("international_results",) and hist_at is not None:
+        out.append(fresh.assess("venue", hist_at, source=venue.source, note=venue.note))
+    elif venue.source == "user":
+        out.append(fresh.assess("venue", datetime.utcnow(), source="user", note="Definido manualmente."))
+    else:
+        out.append(fresh.assess("venue", datetime.utcnow(), source=venue.source, note="Regra de convenção (não é uma coleta)."))
+    out.append(fresh.unavailable("lineup", "Nenhum provider público de escalações integrado (PLAYER DATA UNAVAILABLE)."))
+    return out
+
+
+def _record_venue_conflicts(session: Session, row: Event, detected: VenueInfo, chosen: VenueInfo) -> None:
+    """Registra divergências de mando/venue entre a listagem Superbet, o dataset e o usuário."""
+    try:
+        if chosen.source == "user" and (detected.status != chosen.status or (detected.neutral is not None and detected.neutral != chosen.neutral)):
+            record_conflict(
+                session, event_id=row.id, field="neutral_venue", source_a=detected.source or "detected", value_a={"status": detected.status, "neutral": detected.neutral},
+                source_b="user", value_b={"status": chosen.status, "neutral": chosen.neutral}, selected_value={"status": chosen.status, "neutral": chosen.neutral},
+                selected_source="user", method="user_override", confidence=1.0, canonical_event_id=row.canonical_event_id,
+            )
+        if detected.status == "NEUTRAL" and detected.source == "international_results":
+            record_conflict(
+                session, event_id=row.id, field="neutral_venue", source_a="superbet", value_a={"home": row.home_name, "neutral": False},
+                source_b="international_results", value_b={"neutral": True, "city": detected.city, "country": detected.country},
+                selected_value={"neutral": True}, selected_source="international_results", method="dataset_flag", confidence=detected.confidence,
+                canonical_event_id=row.canonical_event_id,
+            )
+        if detected.listing_swapped:
+            record_conflict(
+                session, event_id=row.id, field="home_team", source_a="superbet", value_a=row.home_name,
+                source_b="international_results", value_b=row.away_name, selected_value=row.home_name, selected_source="superbet",
+                method="listing_kept_unconfirmed", confidence=0.5, canonical_event_id=row.canonical_event_id,
+            )
+    except Exception as exc:  # noqa: BLE001 — registrar conflito nunca pode derrubar a análise
+        log.warning("falha ao registrar conflito de venue (evento %s): %s", row.id, exc)
 
 
 def _main_odds(markets) -> dict[str, float] | None:

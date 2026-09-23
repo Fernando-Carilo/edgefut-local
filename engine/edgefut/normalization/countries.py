@@ -177,3 +177,35 @@ COUNTRIES_PT_EN: dict[str, str] = {
     "Ilhas Salomão": "Solomon Islands",
     "Taiti": "Tahiti",
 }
+
+# Códigos FIFA (trigramas) → nome EN canônico. Usados pelo CanonicalEventResolver
+# para casar "IRQ x OMA" com "Iraque x Omã" sem depender de similaridade textual.
+COUNTRY_CODES: dict[str, str] = {
+    "BRA": "Brazil", "ARG": "Argentina", "URU": "Uruguay", "PAR": "Paraguay", "CHI": "Chile", "COL": "Colombia",
+    "PER": "Peru", "ECU": "Ecuador", "BOL": "Bolivia", "VEN": "Venezuela", "MEX": "Mexico", "USA": "United States",
+    "CAN": "Canada", "CRC": "Costa Rica", "PAN": "Panama", "HON": "Honduras", "JAM": "Jamaica", "SLV": "El Salvador",
+    "GUA": "Guatemala", "HAI": "Haiti", "CUB": "Cuba", "TRI": "Trinidad and Tobago", "CUW": "Curaçao", "SUR": "Suriname",
+    "GER": "Germany", "FRA": "France", "ENG": "England", "SCO": "Scotland", "WAL": "Wales", "NIR": "Northern Ireland",
+    "IRL": "Republic of Ireland", "ESP": "Spain", "POR": "Portugal", "ITA": "Italy", "NED": "Netherlands", "BEL": "Belgium",
+    "SUI": "Switzerland", "AUT": "Austria", "DEN": "Denmark", "SWE": "Sweden", "NOR": "Norway", "FIN": "Finland",
+    "ISL": "Iceland", "POL": "Poland", "CZE": "Czech Republic", "SVK": "Slovakia", "HUN": "Hungary", "ROU": "Romania",
+    "BUL": "Bulgaria", "SRB": "Serbia", "CRO": "Croatia", "SVN": "Slovenia", "BIH": "Bosnia and Herzegovina",
+    "MNE": "Montenegro", "MKD": "North Macedonia", "ALB": "Albania", "KOS": "Kosovo", "GRE": "Greece", "TUR": "Turkey",
+    "UKR": "Ukraine", "RUS": "Russia", "BLR": "Belarus", "GEO": "Georgia", "ARM": "Armenia", "AZE": "Azerbaijan",
+    "KAZ": "Kazakhstan", "LTU": "Lithuania", "LVA": "Latvia", "EST": "Estonia", "MDA": "Moldova", "CYP": "Cyprus",
+    "MLT": "Malta", "LUX": "Luxembourg", "LIE": "Liechtenstein", "AND": "Andorra", "SMR": "San Marino", "GIB": "Gibraltar",
+    "FRO": "Faroe Islands", "ISR": "Israel", "JPN": "Japan", "KOR": "South Korea", "PRK": "North Korea", "CHN": "China",
+    "AUS": "Australia", "NZL": "New Zealand", "IRN": "Iran", "IRQ": "Iraq", "KSA": "Saudi Arabia", "QAT": "Qatar",
+    "UAE": "United Arab Emirates", "BHR": "Bahrain", "OMA": "Oman", "KUW": "Kuwait", "JOR": "Jordan", "LBN": "Lebanon",
+    "SYR": "Syria", "PLE": "Palestine", "UZB": "Uzbekistan", "TJK": "Tajikistan", "KGZ": "Kyrgyzstan", "TKM": "Turkmenistan",
+    "IND": "India", "THA": "Thailand", "VIE": "Vietnam", "IDN": "Indonesia", "MAS": "Malaysia", "PHI": "Philippines",
+    "SGP": "Singapore", "HKG": "Hong Kong", "TPE": "Taiwan", "EGY": "Egypt", "MAR": "Morocco", "ALG": "Algeria",
+    "TUN": "Tunisia", "LBY": "Libya", "NGA": "Nigeria", "GHA": "Ghana", "SEN": "Senegal", "CMR": "Cameroon",
+    "CIV": "Ivory Coast", "MLI": "Mali", "BFA": "Burkina Faso", "GUI": "Guinea", "GNB": "Guinea-Bissau", "EQG": "Equatorial Guinea",
+    "CPV": "Cape Verde", "GAM": "Gambia", "TOG": "Togo", "BEN": "Benin", "NIG": "Niger", "CHA": "Chad", "SDN": "Sudan",
+    "SSD": "South Sudan", "ETH": "Ethiopia", "KEN": "Kenya", "UGA": "Uganda", "TAN": "Tanzania", "RWA": "Rwanda",
+    "BDI": "Burundi", "COD": "DR Congo", "CGO": "Congo", "GAB": "Gabon", "ANG": "Angola", "ZAM": "Zambia", "ZIM": "Zimbabwe",
+    "MOZ": "Mozambique", "MWI": "Malawi", "NAM": "Namibia", "BOT": "Botswana", "RSA": "South Africa", "MAD": "Madagascar",
+    "MRI": "Mauritius", "COM": "Comoros", "SLE": "Sierra Leone", "LBR": "Liberia", "MTN": "Mauritania", "SWZ": "Eswatini",
+    "LES": "Lesotho", "PNG": "Papua New Guinea", "FIJ": "Fiji", "SOL": "Solomon Islands", "TAH": "Tahiti",
+}

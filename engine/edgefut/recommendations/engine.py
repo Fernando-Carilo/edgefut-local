@@ -42,7 +42,10 @@ def _event_no_bet(
     model_disagreement_pp: float | None,
     confidence: ConfidenceBreakdown,
     unreliable_source: bool,
+    stale_data: str | None = None,
 ) -> NoBetVerdict | None:
+    if stale_data:
+        return NoBetVerdict(no_bet=True, reason="STALE_DATA", detail=stale_data)
     if not supported:
         return NoBetVerdict(no_bet=True, reason="UNSUPPORTED_COMPETITION", detail="Competição sem dataset histórico público mapeado.")
     if not teams_resolved or sim is None:
@@ -72,10 +75,12 @@ def evaluate(
     model_disagreement_pp: float | None,
     unreliable_source: bool,
     market_calibration: dict[str, float] | None = None,
+    stale_data: str | None = None,
 ) -> tuple[list[Recommendation], NoBetVerdict]:
     event_block = _event_no_bet(
         supported=supported, teams_resolved=teams_resolved, min_sample=min_sample, sim=sim,
         model_disagreement_pp=model_disagreement_pp, confidence=confidence, unreliable_source=unreliable_source,
+        stale_data=stale_data,
     )
     market_calibration = market_calibration or {}
     recs: list[Recommendation] = []

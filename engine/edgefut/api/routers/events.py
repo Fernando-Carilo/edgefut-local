@@ -77,7 +77,7 @@ def list_events(
     session: Session = Depends(get_session),
 ):
     start, end = window_bounds(window)
-    q = select(Event).where(Event.kickoff_utc >= start, Event.kickoff_utc < end)
+    q = select(Event).where(Event.kickoff_utc >= start, Event.kickoff_utc < end, Event.duplicate_of.is_(None))
     if competition:
         q = q.where(Event.competition_name.ilike(f"%{competition}%"))
     if search:
@@ -125,6 +125,25 @@ def get_analysis(
         return analyze_event(session, event_id, simulations=simulations, force_odds=refresh, use_cache=not refresh)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/{event_id}/conflicts")
+def event_conflicts(event_id: int, session: Session = Depends(get_session)):
+    from ...quality import conflicts_for_event
+
+    row = session.get(Event, event_id)
+    if row is None:
+        raise HTTPException(404, f"evento {event_id} não encontrado")
+    items = conflicts_for_event(session, event_id)
+    return {
+        "event_id": event_id,
+        "canonical_event_id": row.canonical_event_id,
+        "home_canonical": row.home_canonical,
+        "away_canonical": row.away_canonical,
+        "duplicate_of": row.duplicate_of,
+        "count": len(items),
+        "conflicts": items,
+    }
 
 
 @router.get("/{event_id}/odds/history", response_model=OddsHistoryResponse)

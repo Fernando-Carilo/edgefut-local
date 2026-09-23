@@ -14,6 +14,8 @@ NO_BET_LABELS = {
     "LINEUP_UNCERTAINTY": "escalação não confirmada",
     "EXTREME_ODDS_MOVEMENT": "movimento extremo de odds",
     "UNSUPPORTED_COMPETITION": "competição sem histórico mapeado",
+    "STALE_DATA": "dados expirados (odds ou histórico desatualizados)",
+    "QUALITY_GATE": "não passou no quality gate",
 }
 
 

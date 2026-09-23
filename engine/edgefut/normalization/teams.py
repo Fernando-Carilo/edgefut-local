@@ -7,7 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from .countries import COUNTRIES_PT_EN
+from .countries import COUNTRIES_PT_EN, COUNTRY_CODES
 
 # Superbet (normalizado) → football-data
 CLUB_ALIASES: dict[str, str] = {
@@ -212,6 +212,8 @@ def resolve_country(name: str) -> str | None:
     b = base_name(name)
     if b in COUNTRIES_PT_EN:
         return COUNTRIES_PT_EN[b]
+    if b.upper() in COUNTRY_CODES and len(b) == 3:
+        return COUNTRY_CODES[b.upper()]
     nb = normalize(name)
     for pt, en in COUNTRIES_PT_EN.items():
         if normalize(pt) == nb or normalize(en) == nb:

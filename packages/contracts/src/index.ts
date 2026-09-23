@@ -16,7 +16,9 @@ export type NoBetReason =
   | "SMALL_SAMPLE"
   | "LINEUP_UNCERTAINTY"
   | "EXTREME_ODDS_MOVEMENT"
-  | "UNSUPPORTED_COMPETITION";
+  | "UNSUPPORTED_COMPETITION"
+  | "STALE_DATA"
+  | "QUALITY_GATE";
 export type Category = "GOLS" | "RESULTADO" | "ESCANTEIOS" | "CARTOES" | "FINALIZACOES" | "JOGADOR" | "OUTRO";
 
 export interface Provenance {
@@ -688,4 +690,6 @@ export const NO_BET_LABELS: Record<NoBetReason, string> = {
   LINEUP_UNCERTAINTY: "Escalação incerta",
   EXTREME_ODDS_MOVEMENT: "Movimento extremo de odds",
   UNSUPPORTED_COMPETITION: "Competição não suportada",
+  STALE_DATA: "Dados expirados",
+  QUALITY_GATE: "Quality gate",
 };
