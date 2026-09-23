@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...core import versions
@@ -71,13 +71,13 @@ def health_system(session: Session = Depends(get_session)):
 
 @router.get("/jobs")
 def jobs_history(limit: int = Query(100, le=500), job: str | None = None, session: Session = Depends(get_session)):
-    q = select(JobRun).order_by(JobRun.started_at.desc()).limit(limit)
+    q = select(JobRun).order_by(JobRun.started_at.desc())
     if job:
         q = q.where(JobRun.job == job)
-    runs = session.execute(q).scalars().all()
-    last_by_job: dict[str, dict] = {}
-    for r in reversed(runs):
-        last_by_job[r.job] = _job_run(r)
+    runs = session.execute(q.limit(limit)).scalars().all()
+    # última execução de CADA job, independente do limite/filtro (jobs frequentes não escondem os raros)
+    last_ids = select(func.max(JobRun.id)).group_by(JobRun.job)
+    last_by_job: dict[str, dict] = {r.job: _job_run(r) for r in session.execute(select(JobRun).where(JobRun.id.in_(last_ids))).scalars()}
     return {
         "generated_at": datetime.utcnow(),
         "scheduler_running": jobs.is_running(),
@@ -113,10 +113,10 @@ def jobs_run(job: str):
 
 @router.get("/alerts")
 def alerts(limit: int = Query(100, le=500), unread_only: bool = False, session: Session = Depends(get_session)):
-    from ...alerts import KINDS, list_alerts
+    from ...alerts import KINDS, list_alerts, unread_count
 
     items = list_alerts(session, limit=limit, unread_only=unread_only)
-    return {"generated_at": datetime.utcnow(), "kinds": KINDS, "unread": sum(1 for a in items if a["read_at"] is None), "alerts": items}
+    return {"generated_at": datetime.utcnow(), "kinds": KINDS, "unread": unread_count(session), "alerts": items}
 
 
 class AlertsReadBody(BaseModel):

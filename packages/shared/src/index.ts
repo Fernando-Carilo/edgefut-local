@@ -68,6 +68,7 @@ export function relativeTime(iso: string | null | undefined, now = new Date()): 
   if (!d) return "—";
   const diff = Math.round((d.getTime() - now.getTime()) / 60000);
   const abs = Math.abs(diff);
+  if (abs === 0) return "agora";
   const label = abs < 60 ? `${abs} min` : abs < 60 * 48 ? `${Math.round(abs / 60)} h` : `${Math.round(abs / 1440)} d`;
   return diff >= 0 ? `em ${label}` : `há ${label}`;
 }

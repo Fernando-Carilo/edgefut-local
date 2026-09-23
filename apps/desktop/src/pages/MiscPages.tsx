@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BacktestMetrics, CalibrationBucket, LiveEvent, SourceCard as SourceCardT } from "@edgefut/contracts";
-import { fmtDateTime, fmtTime, int, num, odd, pct, relativeTime, signedPct } from "@edgefut/shared";
+import { fmtDateTime, fmtTime, int, num, odd, parseUtc, pct, relativeTime, signedPct } from "@edgefut/shared";
 import clsx from "clsx";
 import { Database, Eye, Heart, Info, RefreshCw, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -23,8 +23,8 @@ export function LivePage() {
   if (q.isLoading) return <Loading label="Consultando jogos em andamento…" />;
   if (q.isError) return <ErrorBox error={q.error} retry={() => q.refetch()} />;
   const d = q.data!;
-  const fetchedAt = q.dataUpdatedAt;
-  const age = d.age_seconds !== null ? d.age_seconds + Math.max(0, Math.round((Date.now() - fetchedAt) / 1000)) : null;
+  const updated = parseUtc(d.updated_at);
+  const age = updated ? Math.max(0, Math.round((Date.now() - updated.getTime()) / 1000)) : d.age_seconds;
   void tick;
   return (
     <div className="space-y-5">

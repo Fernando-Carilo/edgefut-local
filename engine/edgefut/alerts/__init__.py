@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db.models import Alert, Setting
@@ -99,10 +99,15 @@ def _emit(session: Session, kind: str, event_id: int, title: str, detail: dict, 
     return 1
 
 
+def unread_count(session: Session) -> int:
+    return int(session.execute(select(func.count()).select_from(Alert).where(Alert.read_at.is_(None))).scalar_one() or 0)
+
+
 def list_alerts(session: Session, limit: int = 100, unread_only: bool = False) -> list[dict]:
-    q = select(Alert).order_by(Alert.created_at.desc()).limit(limit)
+    q = select(Alert).order_by(Alert.created_at.desc())
     if unread_only:
         q = q.where(Alert.read_at.is_(None))
+    q = q.limit(limit)
     return [
         {
             "id": a.id, "kind": a.kind, "kind_label": KINDS.get(a.kind, a.kind), "event_id": a.event_id, "title": a.title,
