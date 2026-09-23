@@ -168,6 +168,8 @@ def analyze_event(
 
     sync = SuperbetSync()
     odds_status = sync.sync_odds(session, event_id, force=force_odds)
+    # Libera o lock de escrita antes do ajuste dos modelos (pode levar segundos).
+    session.commit()
     row = session.get(Event, event_id)
     if row is None:
         raise LookupError(f"evento {event_id} não encontrado")
@@ -350,6 +352,7 @@ def analyze_event(
 
     if save_snapshot and row.kickoff_utc > datetime.utcnow():
         analysis.snapshot_id = _save_snapshot(session, row, analysis)
+        session.commit()
 
     with _cache_lock:
         _cache[event_id] = (datetime.utcnow(), analysis)

@@ -14,7 +14,9 @@ from ..core.paths import get_paths
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
     url = f"sqlite:///{get_paths().sqlite}"
-    engine = create_engine(url, future=True, connect_args={"check_same_thread": False})
+    # timeout: o scheduler e as requisições escrevem concorrentemente no mesmo arquivo;
+    # com WAL + busy_timeout as escritas se enfileiram em vez de falhar com "database is locked".
+    engine = create_engine(url, future=True, connect_args={"check_same_thread": False, "timeout": 30})
 
     @event.listens_for(engine, "connect")
     def _pragmas(dbapi_conn, _record):  # pragma: no cover - trivial
@@ -22,6 +24,7 @@ def get_engine() -> Engine:
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA foreign_keys=ON")
         cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=30000")
         cur.close()
 
     return engine
