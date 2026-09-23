@@ -14,7 +14,7 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..collectors import SuperbetSync, latest_odds_rows
+from ..collectors import SuperbetSync, latest_odds_rows, odds_history_map
 from ..collectors.sync import IdentityAssigner
 from ..core import versions
 from ..core.config import settings
@@ -282,7 +282,8 @@ def analyze_event(
 
     # ---- odds --------------------------------------------------------------------
     rows, opening, collected_at, odds_url = latest_odds_rows(session, event_id)
-    markets = build_markets(rows, opening, collected_at, odds_url)
+    history = odds_history_map(session, event_id, before=row.kickoff_utc)
+    markets = build_markets(rows, opening, collected_at, odds_url, history=history)
     has_1x2 = any(m.market_key == "1X2" for m in markets)
 
     # ---- freshness (nunca usar dado EXPIRED silenciosamente) ---------------------

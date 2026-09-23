@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ..domain.analysis import EventSummary, MarketOdds, NoBetReason, Recommendation
+from ..domain.analysis import EventSummary, LineMovement, MarketOdds, NoBetReason, Recommendation
 
 
 class HealthResponse(BaseModel):
@@ -49,6 +49,9 @@ class OddsPoint(BaseModel):
 class OddsHistoryResponse(BaseModel):
     event_id: int
     series: dict[str, list[OddsPoint]]  # "1X2|HOME|None" → pontos
+    movement: dict[str, LineMovement] = {}  # resumo abertura/atual/mín/máx por seleção
+    kickoff_utc: datetime | None = None
+    closing: dict[str, float] = {}  # closing line fixada (só após kickoff)
 
 
 class RadarItem(BaseModel):
@@ -192,6 +195,8 @@ class SettingsModel(BaseModel):
     ollama_model: str = "llama3.1"
     events_refresh_min: int = 15
     odds_refresh_min: int = 5
+    margin_method: Literal["MULTIPLICATIVE", "SHIN"] = "MULTIPLICATIVE"
+    live_poll_seconds: int = 30
 
 
 class BootstrapStatus(BaseModel):

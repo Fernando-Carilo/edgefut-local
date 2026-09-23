@@ -331,6 +331,22 @@ class SuperbetSync:
         return {(r.market_key, r.selection_key, r.line): r.price for r in rows}
 
 
+def odds_history_map(session: Session, event_id: int, before: datetime | None = None) -> dict[tuple, list[tuple[datetime, float]]]:
+    """Coletas pré-jogo por seleção: {(market_key, selection_key, line): [(collected_at, price), ...]}.
+
+    `before` limita a coletas anteriores a um instante (as_of) — usado para nunca
+    misturar odds posteriores ao kickoff na movimentação.
+    """
+    q = select(OddsSnapshot).where(OddsSnapshot.event_id == event_id)
+    if before is not None:
+        q = q.where(OddsSnapshot.collected_at <= before)
+    rows = session.execute(q.order_by(OddsSnapshot.collected_at.asc())).scalars().all()
+    out: dict[tuple, list[tuple[datetime, float]]] = {}
+    for r in rows:
+        out.setdefault((r.market_key, r.selection_key, r.line), []).append((r.collected_at, r.price))
+    return out
+
+
 def latest_odds_rows(session: Session, event_id: int) -> tuple[list[dict], dict[tuple, float], datetime | None, str | None]:
     """Retorna (linhas atuais, preços de abertura, collected_at, source_url)."""
     rows = session.execute(

@@ -301,6 +301,7 @@ def load_settings(session: Session) -> SettingsModel:
         min_odd=settings.min_odd, max_odd=settings.max_odd, kelly_fraction_max=settings.kelly_fraction_max,
         ollama_enabled=settings.ollama_enabled, ollama_model=settings.ollama_model,
         events_refresh_min=settings.events_refresh_min, odds_refresh_min=settings.odds_refresh_min,
+        margin_method=settings.margin_method, live_poll_seconds=settings.live_poll_seconds,  # type: ignore[arg-type]
     )
     if row and row.value:
         return base.model_copy(update={k: v for k, v in row.value.items() if k in SettingsModel.model_fields})
@@ -318,6 +319,8 @@ def apply_settings(model: SettingsModel) -> None:
     settings.ollama_model = model.ollama_model
     settings.events_refresh_min = model.events_refresh_min
     settings.odds_refresh_min = model.odds_refresh_min
+    settings.margin_method = model.margin_method
+    settings.live_poll_seconds = max(20, model.live_poll_seconds)
 
 
 @router.get("/settings", response_model=SettingsModel)

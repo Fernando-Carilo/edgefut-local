@@ -7,11 +7,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ...analysis.pipeline import analyze_event, cached_analysis, event_summary
-from ...collectors import SuperbetSync, latest_odds_rows
+from ...collectors import SuperbetSync, latest_odds_rows, odds_history_map
 from ...db.models import Competition, Event, Favorite, OddsSnapshot
 from ...db.session import get_session
 from ...domain.analysis import MatchAnalysis
 from ...odds import build_markets
+from ...odds.implied import line_movement
 from ...scheduler import jobs
 from ...simulation.monte_carlo import ALLOWED_SIMULATIONS
 from ..schemas import EventDetailResponse, EventListResponse, OddsHistoryResponse, OddsPoint, VenueOverride
@@ -107,7 +108,7 @@ def get_event(event_id: int, session: Session = Depends(get_session)):
         if row is None:
             raise HTTPException(404, f"evento {event_id} não encontrado ({res.get('error')})")
     rows, opening, collected_at, url = latest_odds_rows(session, event_id)
-    markets = build_markets(rows, opening, collected_at, url)
+    markets = build_markets(rows, opening, collected_at, url, history=odds_history_map(session, event_id, before=row.kickoff_utc))
     summary = _enrich(event_summary(row, session, next(({s.key: s.price for s in m.selections} for m in markets if m.market_key == "1X2"), None)), event_id)
     return EventDetailResponse(event=summary, markets=markets)
 
@@ -151,11 +152,20 @@ def odds_history(event_id: int, market_key: str | None = None, session: Session 
     q = select(OddsSnapshot).where(OddsSnapshot.event_id == event_id)
     if market_key:
         q = q.where(OddsSnapshot.market_key == market_key)
+    ev = session.get(Event, event_id)
+    if ev is not None:
+        q = q.where(OddsSnapshot.collected_at <= ev.kickoff_utc + timedelta(minutes=2))  # nunca mistura odds ao vivo
     rows = session.execute(q.order_by(OddsSnapshot.collected_at.asc())).scalars().all()
     series: dict[str, list[OddsPoint]] = {}
     for r in rows:
         series.setdefault(f"{r.market_key}|{r.selection_key}|{r.line}", []).append(OddsPoint(collected_at=r.collected_at, price=r.price))
-    return OddsHistoryResponse(event_id=event_id, series=series)
+    movement = {k: lm for k, v in series.items() if (lm := line_movement([(p.collected_at, p.price) for p in v])) is not None}
+    from ...odds.closing import closing_for_event
+
+    return OddsHistoryResponse(
+        event_id=event_id, series=series, movement=movement, kickoff_utc=ev.kickoff_utc if ev else None,
+        closing=closing_for_event(session, event_id),
+    )
 
 
 @router.patch("/{event_id}/venue", response_model=MatchAnalysis)

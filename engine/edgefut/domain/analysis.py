@@ -191,15 +191,41 @@ class SimulationOutput(BaseModel):
     handicap_home: dict[str, float] = Field(default_factory=dict)  # linha → P(cobre)
 
 
+MarginMethod = Literal["MULTIPLICATIVE", "SHIN"]
+
+
+class LineMovement(BaseModel):
+    """Movimento da linha desde a primeira coleta (odds pré-jogo apenas)."""
+
+    opening_odd: float
+    current_odd: float
+    lowest_odd: float
+    highest_odd: float
+    absolute_move: float  # current − opening
+    percentage_move: float  # (current/opening − 1) × 100
+    implied_opening: float  # 1/opening
+    implied_current: float
+    implied_probability_move_pp: float  # (implied_current − implied_opening) × 100
+    direction: Literal["up", "down", "flat"]
+    points: int  # coletas observadas
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    extreme: bool = False  # |percentage_move| acima do limiar de movimento extremo
+
+
 class SelectionOdds(BaseModel):
     key: str
     name: str
     price: float
-    implied: float
-    fair: float | None = None
+    implied: float  # 1/price (com margem)
+    fair: float | None = None  # probabilidade justa pelo método configurado
+    fair_method: MarginMethod | None = None
+    fair_multiplicative: float | None = None
+    fair_shin: float | None = None
     opening_price: float | None = None
     movement_pct: float | None = None
     direction: Literal["up", "down", "flat"] | None = None
+    movement: LineMovement | None = None
     model_prob: float | None = None
     edge_pp: float | None = None
     ev_pct: float | None = None
@@ -212,6 +238,8 @@ class MarketOdds(BaseModel):
     selections: list[SelectionOdds]
     overround: float | None = None
     margin_removed: bool = False
+    margin_method: MarginMethod | None = None
+    shin_z: float | None = None  # proporção estimada de apostadores informados (Shin)
     collected_at: datetime | None = None
     source: str = "superbet"
     source_url: str | None = None
