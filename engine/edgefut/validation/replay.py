@@ -45,7 +45,7 @@ from ..models.dixon_coles import dixon_coles_output, fit_dixon_coles
 from ..models.elo import HOME_ADV_CLUB, HOME_ADV_NATIONAL, EloTable, elo_probabilities, update_elo
 from ..models.ensemble import weights_from_scores
 from ..models.poisson import poisson_model
-from ..models.international_strength import fit_international, international_output
+from ..models.international_strength import fit_international, international_output, tournament_type
 from ..models.strength_v2 import fit_strength_v2, strength_v2_output
 from ..odds.implied import remove_margin
 from .bootstrap import bootstrap_ci, lift_pct, model_significance, paired_bootstrap_diff, roi_stat, sample_quality
@@ -394,7 +394,10 @@ def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest) -> tuple[
             hg, ag = int(r.hg), int(r.ag)
             neutral = bool(getattr(r, "neutral", False)) if getattr(r, "neutral", None) is not None and not pd.isna(getattr(r, "neutral", None)) else False
             odds, odds_ou, close, close_ou = _odds3(r), _odds_ou(r), _close3(r), _odds_ou(r, "odds_close")
-            group = str(getattr(r, "season", None) or getattr(r, "tournament", None) or "") or None
+            if req.is_national:
+                group = tournament_type(str(getattr(r, "competition", "") or getattr(r, "tournament", "") or ""))
+            else:
+                group = str(getattr(r, "season", None) or "") or None
             outs = wm.predict(r.home, r.away, neutral, ens_w, str(getattr(r, "competition", "") or ""))
             outs.update(wm.baselines(r.home, r.away, neutral, odds, odds_ou))
             for model, (p3, pou) in outs.items():
@@ -517,6 +520,21 @@ def aggregate(preds: list[_Pred], bets: list[_Bet], windows: list[dict], req: Re
             "vs_naive": {m: _paired_vs(bm, m, "naive") for m in models_present if m in bm and "naive" in bm},
         }
 
+    # por grupo (INTL: tipo de torneio — amistoso / eliminatória / torneio; clubes: temporada)
+    by_group: dict[str, dict] = {}
+    for g in sorted({p.group for p in preds if p.group}):
+        rows_g = [p for p in preds if p.group == g]
+        bm = {}
+        for p in rows_g:
+            bm.setdefault(p.model, []).append(p)
+        by_group[g] = {
+            "matches": len({(p.dataset, p.mid) for p in rows_g}),
+            "sample_quality": sample_quality(len({(p.dataset, p.mid) for p in rows_g})),
+            "brier": {m: round(float(np.mean([_multiclass_brier(p.p1x2, p.outcome) for p in r])), 4) for m, r in bm.items()},
+            "vs_naive": {m: _paired_vs(bm, m, "naive") for m in models_present if m in bm and "naive" in bm},
+            "vs_market": {m: _paired_vs(bm, m, "market") for m in models_present if m in bm and "market" in bm},
+        }
+
     # por janela (estabilidade)
     per_window: list[dict] = []
     for w in windows:
@@ -556,7 +574,7 @@ def aggregate(preds: list[_Pred], bets: list[_Bet], windows: list[dict], req: Re
         "datasets": sorted({p.dataset for p in preds}),
         "models": models_present, "baselines": baselines_present, "labels": MODEL_LABELS,
         "overall": overall, "vs_baseline": vs_baseline, "ranking_brier": ranking, "pairwise": pairwise,
-        "by_dataset": by_dataset, "per_window": per_window, "bets": bet_report,
+        "by_dataset": by_dataset, "by_group": by_group, "per_window": per_window, "bets": bet_report,
         "limitations": [
             "Odds do football-data são médias pré-jogo (não Superbet) — proxy de mercado.",
             "Gate simplificado (edge/EV/faixa de odd); sem confiança, frescor, clusters ou correlação.",
