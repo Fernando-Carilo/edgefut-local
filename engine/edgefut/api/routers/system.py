@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -118,11 +119,15 @@ def alerts(limit: int = Query(100, le=500), unread_only: bool = False, session: 
     return {"generated_at": datetime.utcnow(), "kinds": KINDS, "unread": sum(1 for a in items if a["read_at"] is None), "alerts": items}
 
 
+class AlertsReadBody(BaseModel):
+    ids: list[int] | None = None  # None → marca todos como lidos
+
+
 @router.post("/alerts/read")
-def alerts_read(ids: list[int] | None = None, session: Session = Depends(get_session)):
+def alerts_read(body: AlertsReadBody | None = None, session: Session = Depends(get_session)):
     from ...alerts import mark_read
 
-    return {"ok": True, "marked": mark_read(session, ids)}
+    return {"ok": True, "marked": mark_read(session, body.ids if body else None)}
 
 
 @router.get("/calibration")

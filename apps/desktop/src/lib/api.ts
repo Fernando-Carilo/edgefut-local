@@ -1,8 +1,11 @@
 import type {
+  AlertsResponse,
   BacktestRequest,
   BacktestResponse,
   BootstrapStatus,
+  CalibrationResponse,
   ChatResponse,
+  ConflictsResponse,
   DashboardResponse,
   EntriesResponse,
   EventDetailResponse,
@@ -10,6 +13,7 @@ import type {
   EventWindow,
   HealthResponse,
   HistoryResponse,
+  JobsResponse,
   LiveResponse,
   MatchAnalysis,
   ModelsResponse,
@@ -25,6 +29,7 @@ import type {
   SourcesResponse,
   StakeRequest,
   StakeResponse,
+  SystemHealthResponse,
   VenueOverride,
 } from "@edgefut/contracts";
 
@@ -82,6 +87,7 @@ export const api = {
   analysis: (id: number, p: { simulations?: number; refresh?: boolean } = {}) =>
     request<MatchAnalysis>(`/events/${id}/analysis${qs(p)}`),
   oddsHistory: (id: number) => request<OddsHistoryResponse>(`/events/${id}/odds/history`),
+  conflicts: (id: number) => request<ConflictsResponse>(`/events/${id}/conflicts`),
   setVenue: (id: number, body: VenueOverride) =>
     request<{ ok: boolean; venue: unknown }>(`/events/${id}/venue`, { method: "PATCH", body: JSON.stringify(body) }),
   favorite: (id: number, on: boolean) =>
@@ -115,10 +121,19 @@ export const api = {
   historyDetail: (id: number) => request<Record<string, unknown>>(`/history/${id}`),
 
   sources: () => request<SourcesResponse>("/sources"),
-  refreshSource: (what: "events" | "odds" | "history" | "settle" | "radar", force = false) =>
-    request<Record<string, unknown>>(`/sources/refresh${qs({ what, force })}`, { method: "POST" }),
+  refreshSource: (
+    what: "events" | "odds" | "history" | "settle" | "radar" | "closing_lines" | "performance" | "calibration" | "alerts" | "live_poll",
+    force = false,
+  ) => request<Record<string, unknown>>(`/sources/refresh${qs({ what, force })}`, { method: "POST" }),
+  systemHealth: () => request<SystemHealthResponse>("/health/system"),
+  jobs: (p: { job?: string; limit?: number } = {}) => request<JobsResponse>(`/jobs${qs(p)}`),
+  runJob: (job: string) => request<Record<string, unknown>>(`/jobs/${job}/run`, { method: "POST" }),
+  alerts: (p: { limit?: number; unread_only?: boolean } = {}) => request<AlertsResponse>(`/alerts${qs(p)}`),
+  markAlertsRead: (ids?: number[]) =>
+    request<{ ok: boolean; marked: number }>("/alerts/read", { method: "POST", body: JSON.stringify({ ids: ids ?? null }) }),
+  calibration: (market_key?: string) => request<CalibrationResponse>(`/calibration${qs({ market_key })}`),
   models: () => request<ModelsResponse>("/models"),
   settings: () => request<SettingsModel>("/settings"),
   saveSettings: (body: SettingsModel) => request<SettingsModel>("/settings", { method: "PUT", body: JSON.stringify(body) }),
-  live: () => request<LiveResponse>("/live"),
+  live: (poll = false) => request<LiveResponse>(`/live${qs({ poll })}`),
 };

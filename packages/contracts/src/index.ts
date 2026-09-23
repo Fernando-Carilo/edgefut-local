@@ -20,6 +20,58 @@ export type NoBetReason =
   | "STALE_DATA"
   | "QUALITY_GATE";
 export type Category = "GOLS" | "RESULTADO" | "ESCANTEIOS" | "CARTOES" | "FINALIZACOES" | "JOGADOR" | "OUTRO";
+export type FreshnessStatus = "FRESH" | "AGING" | "STALE" | "EXPIRED" | "UNAVAILABLE";
+export type HealthStatus = "HEALTHY" | "DEGRADED" | "STALE" | "UNAVAILABLE";
+export type MarginMethod = "MULTIPLICATIVE" | "SHIN";
+export type OpportunityLabel = "HIGH_PROBABILITY" | "VALUE" | "HIGH_PROBABILITY_VALUE";
+export type EvidenceLevel = "SETTLED" | "BACKTEST_ODDS" | "MODEL_ONLY";
+export type ConfidenceGroup = "DATA_QUALITY" | "MODEL_AGREEMENT" | "CALIBRATION" | "HISTORICAL_SAMPLE" | "FRESHNESS" | "CONTEXT";
+
+/** Frescor de um insumo: quando foi coletado, até quando vale e há quanto tempo existe. */
+export interface Freshness {
+  kind: string;
+  label: string;
+  collected_at: string | null;
+  valid_until: string | null;
+  age_seconds: number | null;
+  status: FreshnessStatus;
+  source: string | null;
+  note: string | null;
+}
+
+/** Divergência entre fontes resolvida pelo Source Conflict Engine. */
+export interface ConflictOut {
+  id: number;
+  field: string;
+  field_label: string;
+  source_a: string;
+  value_a: unknown;
+  source_b: string;
+  value_b: unknown;
+  selected_value: unknown;
+  selected_source: string | null;
+  resolution_method: string;
+  resolution_label: string;
+  confidence: number;
+  created_at: string;
+}
+
+export interface LineMovement {
+  opening_odd: number;
+  current_odd: number;
+  lowest_odd: number;
+  highest_odd: number;
+  absolute_move: number;
+  percentage_move: number;
+  implied_opening: number;
+  implied_current: number;
+  implied_probability_move_pp: number;
+  direction: "up" | "down" | "flat";
+  points: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  extreme: boolean;
+}
 
 export interface Provenance {
   source: string;
@@ -203,9 +255,13 @@ export interface SelectionOdds {
   price: number;
   implied: number;
   fair: number | null;
+  fair_method: MarginMethod | null;
+  fair_multiplicative: number | null;
+  fair_shin: number | null;
   opening_price: number | null;
   movement_pct: number | null;
   direction: "up" | "down" | "flat" | null;
+  movement: LineMovement | null;
   model_prob: number | null;
   edge_pp: number | null;
   ev_pct: number | null;
@@ -218,6 +274,8 @@ export interface MarketOdds {
   selections: SelectionOdds[];
   overround: number | null;
   margin_removed: boolean;
+  margin_method: MarginMethod | null;
+  shin_z: number | null;
   collected_at: string | null;
   source: string;
   source_url: string | null;
@@ -228,13 +286,73 @@ export interface ConfidenceComponent {
   weight: number;
   value: number;
   note: string | null;
+  group: ConfidenceGroup;
 }
 
+/** EDGEFUT CONFIDENCE 0-100 com breakdown por grupo. */
 export interface ConfidenceBreakdown {
   model_version: string;
   score: number;
   grade: Grade;
   components: ConfidenceComponent[];
+  groups: Partial<Record<ConfidenceGroup, number>>;
+}
+
+export interface ScoreComponent {
+  key: string;
+  label: string;
+  weight: number;
+  value: number;
+  note: string | null;
+}
+
+export interface OpportunityBreakdown {
+  model_version: string;
+  score: number;
+  components: ScoreComponent[];
+}
+
+export interface QualityGateCheck {
+  key: string;
+  label: string;
+  passed: boolean;
+  detail: string | null;
+}
+
+export interface QualityGate {
+  passed: boolean;
+  checks: QualityGateCheck[];
+  failed: string[];
+}
+
+export interface ModelRow {
+  key: string;
+  label: string;
+  model_version: string;
+  available: boolean;
+  lambda_home: number | null;
+  lambda_away: number | null;
+  p_home: number | null;
+  p_draw: number | null;
+  p_away: number | null;
+  over25: number | null;
+  btts: number | null;
+  weight: number | null;
+  note: string | null;
+}
+
+export interface ModelComparison {
+  model_version: string;
+  rows: ModelRow[];
+  consensus: ModelRow | null;
+  max_disagreement_pp: number | null;
+  disagreement_pairs: Record<string, number>;
+  disagreement_scope: string[];
+  excluded_low_weight: string[];
+  weights_source: string;
+  weights_group: string | null;
+  weights_sample: number | null;
+  note: string | null;
 }
 
 export interface DataQualityCheck {
@@ -256,6 +374,10 @@ export interface Recommendation {
   line: number | null;
   odd: number;
   model_prob: number;
+  model_prob_raw: number | null;
+  model_prob_calibrated: number | null;
+  calibration_group: string | null;
+  calibration_reliable: boolean;
   market_prob: number;
   market_prob_is_fair: boolean;
   edge_pp: number;
@@ -267,6 +389,12 @@ export interface Recommendation {
   reasons: string[];
   explanation: string | null;
   category: Category;
+  label: OpportunityLabel | null;
+  opportunity: OpportunityBreakdown | null;
+  quality_gate: QualityGate | null;
+  why: string[];
+  why_not: string[];
+  evidence: EvidenceLevel | null;
 }
 
 export interface NoBetVerdict {
@@ -310,6 +438,9 @@ export interface MatchAnalysis {
   elo: EloOutput;
   poisson: GoalsModelOutput;
   dixon_coles: GoalsModelOutput;
+  bivariate_poisson: GoalsModelOutput | null;
+  consensus: GoalsModelOutput | null;
+  model_comparison: ModelComparison | null;
   simulation: SimulationOutput | null;
   corners: CountDistribution;
   cards: CountDistribution;
@@ -326,6 +457,15 @@ export interface MatchAnalysis {
   source_attempts: SourceAttempt[];
   snapshot_id: number | null;
   warnings: string[];
+  freshness: Freshness[];
+  freshness_status: FreshnessStatus | null;
+  conflicts: ConflictOut[];
+  conflicts_count: number;
+  canonical_event_id: string | null;
+  why_not: string[];
+  quality_gate_passed: boolean;
+  evidence: EvidenceLevel | null;
+  cache_key: string | null;
 }
 
 // ---- API ---------------------------------------------------------------
@@ -348,6 +488,11 @@ export interface SchedulerState {
   last_history_sync: string | null;
   last_settlement: string | null;
   last_radar_refresh: string | null;
+  last_closing_lines?: string | null;
+  last_performance_update?: string | null;
+  last_calibration_update?: string | null;
+  last_ensemble_weights?: string | null;
+  last_live_poll?: string | null;
   radar_running: boolean;
   errors: string[];
 }
@@ -381,6 +526,19 @@ export interface OddsPoint {
 export interface OddsHistoryResponse {
   event_id: number;
   series: Record<string, OddsPoint[]>;
+  movement: Record<string, LineMovement>;
+  kickoff_utc: string | null;
+  closing: Record<string, number>;
+}
+
+export interface ConflictsResponse {
+  event_id: number;
+  canonical_event_id: string | null;
+  home_canonical: string | null;
+  away_canonical: string | null;
+  duplicate_of: number | null;
+  count: number;
+  conflicts: ConflictOut[];
 }
 
 export interface RadarItem {
@@ -390,6 +548,29 @@ export interface RadarItem {
   confidence_grade: Grade;
   data_quality: number;
   no_bet_reason: NoBetReason | null;
+  label: OpportunityLabel | null;
+  quality_gate_passed: boolean;
+  freshness_status: FreshnessStatus | null;
+  evidence: EvidenceLevel | null;
+  why: string[];
+}
+
+export interface RadarSummary {
+  last_update: string | null;
+  events_found: number;
+  with_sufficient_data: number;
+  analyzed: number;
+  quality_gate_passed: number;
+  confidence_a: number;
+  confidence_b: number;
+  high_probability: number;
+  value: number;
+  watch: number;
+  no_bet: number;
+  stale: number;
+  alerts_unread: number;
+  no_bet_by_reason: Record<string, number>;
+  gate_passed_by_evidence: Partial<Record<EvidenceLevel, number>>;
 }
 
 export interface RadarCard {
@@ -404,6 +585,8 @@ export interface RadarResponse {
   analyzed_events: number;
   refreshing: boolean;
   cards: RadarCard[];
+  summary: RadarSummary | null;
+  thresholds: Record<string, number>;
 }
 
 export interface EntryRow {
@@ -427,6 +610,14 @@ export interface DashboardResponse {
   top_opportunities: EntryRow[];
   popular_events: EventSummary[];
   scheduler: SchedulerState;
+  morning_summary: string;
+  cta: string;
+  events_found: number;
+  quality_gate_passed: number;
+  watch: number;
+  no_bet: number;
+  alerts_unread: number;
+  health_overall: HealthStatus | null;
 }
 
 export interface SimulatorRequest {
@@ -515,6 +706,15 @@ export interface SettingsModel {
   ollama_model: string;
   events_refresh_min: number;
   odds_refresh_min: number;
+  margin_method: MarginMethod;
+  live_poll_seconds: number;
+  gate_min_data_quality: number;
+  gate_min_confidence: number;
+  gate_min_sample: number;
+  gate_max_disagreement_pp: number;
+  gate_max_edge_pp_uncalibrated: number;
+  high_probability_min: number;
+  opportunity_weights: Record<string, number>;
 }
 
 export interface BootstrapStep {
@@ -554,7 +754,27 @@ export interface DatasetInfo {
   collected_at?: string | null;
   source?: string;
   source_url?: string;
+  has_odds?: boolean;
+  evidence?: EvidenceLevel;
   coverage?: { corners_pct: number; shots_pct: number; cards_pct: number };
+}
+
+/** Fontes V2: um card por fonte. */
+export interface SourceCard {
+  key: string;
+  name: string;
+  kind: string;
+  status: HealthStatus;
+  summary: string;
+  freshness: Freshness | null;
+  last_ok: string | null;
+  avg_latency_ms: number | null;
+  error_rate: number | null;
+  requests_24h: number | null;
+  provides: string[];
+  does_not_provide: string[];
+  url: string | null;
+  note: string | null;
 }
 
 export interface SourceLogRow {
@@ -580,6 +800,7 @@ export interface CompetitionInfo {
 export interface SourcesResponse {
   generated_at: string;
   providers: ProviderInfo[];
+  cards: SourceCard[];
   datasets: DatasetInfo[];
   dataset_states: { code: string; provider: string; source_url: string; rows: number; last_success_at: string | null; last_error: string | null }[];
   hosts: Record<string, { consecutive_failures: number; circuit_open: boolean; opened_at: number | null }>;
@@ -589,12 +810,36 @@ export interface SourcesResponse {
   paths: { root: string; processed: string; cache: string };
 }
 
+export interface ModelRegistryRow {
+  id: number;
+  model_id: string;
+  version: string;
+  created_at: string;
+  training_window: string | null;
+  features: string[] | null;
+  parameters: Record<string, unknown> | null;
+  metrics: Record<string, unknown> | null;
+  active: boolean;
+  deprecated: boolean;
+  notes: string | null;
+}
+
+export interface EnsembleWeightGroup {
+  scores: Record<string, { logloss: number; n: number }>;
+  weights: Record<string, number>;
+  sample: number;
+  computed_at: string;
+}
+
 export interface ModelsResponse {
   versions: Record<string, string>;
   app_version: string;
   models: { key: string; version: string; description: string }[];
+  registry: ModelRegistryRow[];
+  ensemble_weights: Record<string, EnsembleWeightGroup>;
+  margin_method: MarginMethod;
   parameters: Record<string, number>;
-  fitted: { elo: string[]; dixon_coles: string[] };
+  fitted: { elo: string[]; dixon_coles: string[]; bivariate_poisson: string[] };
 }
 
 export interface BacktestRequest {
@@ -641,6 +886,7 @@ export interface BacktestMetrics {
   max_drawdown: number | null;
   clv_pct: number | null;
   avg_odd: number | null;
+  sample_status?: "OK" | "INSUFFICIENT_SAMPLE";
 }
 
 export interface BacktestResponse {
@@ -659,13 +905,132 @@ export interface BacktestResponse {
 }
 
 export interface PerformanceResponse {
+  generated_at: string;
   settled_snapshots: number;
   recommended_bets: number;
+  bets_with_closing_line: number;
   overall: BacktestMetrics;
   equity_curve: number[];
   by_market: Record<string, BacktestMetrics>;
+  by_competition: Record<string, BacktestMetrics>;
   model_1x2_all_selections: BacktestMetrics;
+  min_sample: number;
   note: string;
+}
+
+export interface CalibrationBucket {
+  bucket: string;
+  lower: number;
+  upper: number;
+  predicted: number | null;
+  actual: number | null;
+  sample: number;
+}
+
+export interface CalibrationGroup {
+  group_key: string;
+  market_key: string;
+  group: string;
+  n: number;
+  reliable: boolean;
+  brier_raw: number | null;
+  brier_calibrated: number | null;
+  fitted_at: string | null;
+  method: string;
+  min_n: number;
+}
+
+export interface CalibrationResponse {
+  generated_at: string;
+  min_n: number;
+  groups: CalibrationGroup[];
+  diagram: { market_key: string | null; buckets: CalibrationBucket[]; sample: number; brier: number | null; reliable: boolean; min_n: number; model_version: string };
+  note: string;
+}
+
+export interface ComponentHealth {
+  key: string;
+  name: string;
+  status: HealthStatus;
+  summary: string;
+  last_update: string | null;
+  freshness: Freshness | null;
+  details: Record<string, unknown>;
+  note: string | null;
+}
+
+export interface SystemHealthResponse {
+  generated_at: string;
+  overall: HealthStatus;
+  components: ComponentHealth[];
+}
+
+export interface JobRun {
+  id: number;
+  job: string;
+  label: string;
+  correlation_id: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  status: "running" | "ok" | "error" | "skipped" | string;
+  records_processed: number | null;
+  errors: string[] | null;
+  detail: Record<string, unknown> | null;
+}
+
+export interface JobsResponse {
+  generated_at: string;
+  scheduler_running: boolean;
+  scheduled: { id: string; label: string; next_run_at: string | null; trigger: string }[];
+  labels: Record<string, string>;
+  last_by_job: Record<string, JobRun>;
+  runs: JobRun[];
+  state: SchedulerState;
+}
+
+export type AlertKind = "ODD_MOVEMENT" | "DATA_QUALITY_CHANGE" | "MODEL_CONFIDENCE_CHANGE" | "OPPORTUNITY_APPEARED" | "OPPORTUNITY_LOST";
+
+export interface AlertRow {
+  id: number;
+  kind: AlertKind;
+  kind_label: string;
+  event_id: number | null;
+  title: string;
+  detail: Record<string, unknown> | null;
+  severity: "info" | "warning";
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface AlertsResponse {
+  generated_at: string;
+  kinds: Record<AlertKind, string>;
+  unread: number;
+  alerts: AlertRow[];
+}
+
+export interface LiveEvent {
+  event_id: number;
+  home_name: string;
+  away_name: string;
+  kickoff_utc: string;
+  competition_name: string | null;
+  category_name: string | null;
+  status: string;
+  period: string | null;
+  minute: number | null;
+  stoppage_time: string | null;
+  home_score: number | null;
+  away_score: number | null;
+  stats: Record<string, number | null>;
+  market_count: number;
+  markets: MarketOdds[];
+  odds_collected_at: string | null;
+  tracked: boolean;
+  event_url: string | null;
+  movement: Record<string, { from: number; to: number; pct: number }>;
+  full_markets: boolean;
 }
 
 export interface HistoryRow {
@@ -691,10 +1056,21 @@ export interface HistoryResponse {
   total: number;
 }
 
+/** Modo AO VIVO é observação: nunca traz recomendações. */
 export interface LiveResponse {
   available: boolean;
-  events: EventSummary[];
-  reason: string;
+  mode: "OBSERVATION_ONLY";
+  updated_at: string | null;
+  age_seconds: number | null;
+  freshness: Freshness;
+  poll_interval_s: number;
+  next_poll_at: string | null;
+  backoff_s: number;
+  consecutive_errors: number;
+  last_error: string | null;
+  polls: number;
+  events: LiveEvent[];
+  notice: string;
 }
 
 export const NO_BET_LABELS: Record<NoBetReason, string> = {
@@ -709,4 +1085,40 @@ export const NO_BET_LABELS: Record<NoBetReason, string> = {
   UNSUPPORTED_COMPETITION: "Competição não suportada",
   STALE_DATA: "Dados expirados",
   QUALITY_GATE: "Quality gate",
+};
+
+export const FRESHNESS_LABELS: Record<FreshnessStatus, string> = {
+  FRESH: "Fresco",
+  AGING: "Envelhecendo",
+  STALE: "Desatualizado",
+  EXPIRED: "Expirado",
+  UNAVAILABLE: "Indisponível",
+};
+
+export const HEALTH_LABELS: Record<HealthStatus, string> = {
+  HEALTHY: "Saudável",
+  DEGRADED: "Degradado",
+  STALE: "Desatualizado",
+  UNAVAILABLE: "Indisponível",
+};
+
+export const LABEL_TEXT: Record<OpportunityLabel, string> = {
+  HIGH_PROBABILITY: "HIGH PROBABILITY",
+  VALUE: "VALUE",
+  HIGH_PROBABILITY_VALUE: "HIGH PROBABILITY + VALUE",
+};
+
+export const EVIDENCE_LABELS: Record<EvidenceLevel, string> = {
+  SETTLED: "Apostas liquidadas (ROI/CLV medidos)",
+  BACKTEST_ODDS: "Backtest com odds reais possível",
+  MODEL_ONLY: "Só modelo: nunca comparado ao mercado",
+};
+
+export const CONFIDENCE_GROUP_LABELS: Record<ConfidenceGroup, string> = {
+  DATA_QUALITY: "Qualidade dos dados",
+  MODEL_AGREEMENT: "Concordância entre modelos",
+  CALIBRATION: "Calibração",
+  HISTORICAL_SAMPLE: "Amostra histórica",
+  FRESHNESS: "Frescor",
+  CONTEXT: "Contexto",
 };
