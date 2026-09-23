@@ -54,7 +54,11 @@ class EloTable:
 
 def fit_elo(df: pd.DataFrame, is_national: bool) -> EloTable:
     """df ordenado por data ascendente com colunas home, away, hg, ag, neutral, competition."""
-    table = EloTable()
+    return update_elo(EloTable(), df, is_national)
+
+
+def update_elo(table: EloTable, df: pd.DataFrame, is_national: bool) -> EloTable:
+    """Atualiza `table` in-place com novas partidas (ordem cronológica) — usado pelo replay."""
     if df is None or df.empty:
         return table
     ha_base = HOME_ADV_NATIONAL if is_national else HOME_ADV_CLUB

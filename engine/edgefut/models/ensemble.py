@@ -26,8 +26,10 @@ from .goals_common import markets_from_matrix, score_matrix
 
 log = logging.getLogger(__name__)
 
-MODEL_KEYS = ("poisson", "dixon_coles", "bivariate_poisson")
-MODEL_LABELS = {"poisson": "Poisson", "dixon_coles": "Dixon-Coles", "bivariate_poisson": "Bivariate Poisson", "consensus": "Consenso"}
+MODEL_KEYS = ("poisson", "dixon_coles", "bivariate_poisson", "poisson_v2")
+MODEL_LABELS = {"poisson": "Poisson", "dixon_coles": "Dixon-Coles", "bivariate_poisson": "Bivariate Poisson", "poisson_v2": "Poisson · strength-v2", "consensus": "Consenso"}
+# Membros do consenso por campeão (governança: validation/governance.py decide qual está ativo)
+CHAMPION_MEMBERS = {"ensemble": ("poisson", "dixon_coles", "bivariate_poisson"), "ensemble_v2": ("poisson", "dixon_coles", "bivariate_poisson", "poisson_v2")}
 WEIGHTS_KEY = "ensemble_weights"
 MIN_WEIGHT_SAMPLE = 200  # partidas avaliadas no walk-forward para pesos por competição
 LOW_WEIGHT_THRESHOLD = 0.10  # abaixo disso o modelo não participa do veto MODEL_DISAGREEMENT (segue visível)
@@ -61,6 +63,8 @@ class ModelComparison(BaseModel):
     weights_group: str | None = None
     weights_sample: int | None = None
     note: str | None = None
+    champion: str = "ensemble"  # ensemble | ensemble_v2
+    challengers: list[str] = Field(default_factory=list)  # modelos visíveis fora do consenso
 
 
 @dataclass
@@ -105,13 +109,23 @@ def compare(
     dixon_coles: GoalsModelOutput,
     bivariate: GoalsModelOutput,
     weights: WeightSet,
+    poisson_v2: GoalsModelOutput | None = None,
+    champion: str = "ensemble",
 ) -> tuple[ModelComparison, GoalsModelOutput | None, np.ndarray | None]:
     outs = {"poisson": poisson, "dixon_coles": dixon_coles, "bivariate_poisson": bivariate}
-    avail = {k: o for k, o in outs.items() if o.available and o.lambda_home is not None}
+    if poisson_v2 is not None:
+        outs["poisson_v2"] = poisson_v2
+    members = CHAMPION_MEMBERS.get(champion, CHAMPION_MEMBERS["ensemble"])
+    challengers = [k for k in outs if k not in members]
+    all_avail = {k: o for k, o in outs.items() if o.available and o.lambda_home is not None}
+    avail = {k: o for k, o in all_avail.items() if k in members}
     raw_w = {k: max(0.0, weights.weights.get(k, 0.0)) for k in avail}
     total = sum(raw_w.values())
     norm_w = {k: (v / total if total > 0 else 1.0 / len(avail)) for k, v in raw_w.items()} if avail else {}
     rows = [_row(k, o, round(norm_w[k], 3) if k in norm_w else None) for k, o in outs.items()]
+    for r in rows:
+        if r.key in challengers and r.available:
+            r.note = (r.note + " · " if r.note else "") + "challenger: visível, fora do consenso até a regra de promoção."
 
     pairs: dict[str, float] = {}
     keys = list(avail)
@@ -133,7 +147,7 @@ def compare(
     max_dis = max(scoped.values()) if scoped else (0.0 if len(scope) == 1 and len(keys) > 1 else None)
 
     if not avail:
-        return ModelComparison(rows=rows, consensus=None, max_disagreement_pp=None, disagreement_pairs={}, weights_source=weights.source, weights_group=weights.group, weights_sample=weights.sample, note="Nenhum modelo de gols disponível."), None, None
+        return ModelComparison(rows=rows, consensus=None, max_disagreement_pp=None, disagreement_pairs={}, weights_source=weights.source, weights_group=weights.group, weights_sample=weights.sample, note="Nenhum modelo de gols disponível.", champion=champion, challengers=challengers), None, None
 
     matrix = sum(norm_w[k] * _matrix(k, o) for k, o in avail.items())
     matrix = matrix / matrix.sum()
@@ -158,6 +172,7 @@ def compare(
         rows=rows, consensus=cons_row, max_disagreement_pp=max_dis, disagreement_pairs=pairs,
         disagreement_scope=scope, excluded_low_weight=excluded,
         weights_source=weights.source, weights_group=weights.group, weights_sample=weights.sample, note=note,
+        champion=champion, challengers=challengers,
     ), cons, matrix
 
 
@@ -197,6 +212,7 @@ def walk_forward_scores(df: pd.DataFrame, since: datetime, until: datetime, step
     from ..features.strength import league_averages
     from .bivariate_poisson import bivariate_output, fit_bivariate_poisson
     from .dixon_coles import MIN_MATCHES, dixon_coles_output, fit_dixon_coles
+    from .strength_v2 import fit_strength_v2, strength_v2_output
 
     df = df.sort_values("date").reset_index(drop=True)
     losses: dict[str, list[float]] = {k: [] for k in MODEL_KEYS}
@@ -210,6 +226,7 @@ def walk_forward_scores(df: pd.DataFrame, since: datetime, until: datetime, step
             continue
         dc = fit_dixon_coles(train, reference_date=start.to_pydatetime())
         bp = fit_bivariate_poisson(train, reference_date=start.to_pydatetime())
+        sv2 = fit_strength_v2(train, reference_date=start.to_pydatetime())
         la = league_averages(train)
         for r in block.itertuples():
             h, a, hg, ag = r.home, r.away, int(r.hg), int(r.ag)
@@ -219,6 +236,9 @@ def walk_forward_scores(df: pd.DataFrame, since: datetime, until: datetime, step
             if bp is not None and h in bp.attack and a in bp.attack:
                 o = bivariate_output(bp, h, a, 1.0)
                 losses["bivariate_poisson"].append(_logloss_1x2((o.p_home, o.p_draw, o.p_away), hg, ag))  # type: ignore[arg-type]
+            if sv2 is not None and h in sv2.ratings and a in sv2.ratings:
+                o = strength_v2_output(sv2, h, a, 1.0)
+                losses["poisson_v2"].append(_logloss_1x2((o.p_home, o.p_draw, o.p_away), hg, ag))  # type: ignore[arg-type]
             if la is not None:
                 pp = _strength_poisson_probs(train, la, h, a)
                 if pp is not None:

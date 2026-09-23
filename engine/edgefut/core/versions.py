@@ -3,8 +3,11 @@
 APP_VERSION = "0.1.0"
 
 STRENGTH = "strength-v1"
+STRENGTH_V2 = "strength-v2"
+INTL_STRENGTH = "international-strength-v1"
 ELO = "elo-v1"
 POISSON = "goals-poisson-v1"
+POISSON_V2 = "goals-poisson-v2"  # Poisson sobre ratings strength-v2 (opponent-adjusted)
 DIXON_COLES = "goals-dixon-coles-v1"
 BIVARIATE_POISSON = "goals-bivariate-poisson-v1"
 ENSEMBLE = "ensemble-v1"
@@ -19,8 +22,11 @@ PIPELINE = "pipeline-v2"
 
 ALL_MODELS = {
     "strength": STRENGTH,
+    "strength_v2": STRENGTH_V2,
+    "international_strength": INTL_STRENGTH,
     "elo": ELO,
     "poisson": POISSON,
+    "poisson_v2": POISSON_V2,
     "dixon_coles": DIXON_COLES,
     "bivariate_poisson": BIVARIATE_POISSON,
     "ensemble": ENSEMBLE,

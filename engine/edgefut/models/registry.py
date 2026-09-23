@@ -18,8 +18,11 @@ from ..db.models import ModelRegistry
 
 SPECS: dict[str, dict] = {
     "strength": {"features": ["janelas 5/10/20", "splits casa/fora", "ataque/defesa relativos"], "parameters": {"recency_weights": "linear"}},
+    "strength_v2": {"features": ["ataque/defesa ajustados ao adversário (MLE Poisson ponderado)", "ratings casa/fora encolhidos", "strength of schedule", "HA por competição/temporada"], "parameters": {"half_life_days": settings.strength_half_life_days, "prior_k": 6, "cond_k": 10, "ha_min_matches": 100, "decay_selection": "walk-forward validation/decay.py"}},
+    "international_strength": {"features": ["strength-v2 sobre INTL", "amistoso com peso reduzido", "HA por tipo de torneio", "campo neutro → HA=1", "ELO desde 2000"], "parameters": {"friendly_weight": 0.6, "min_matches": 60}},
     "elo": {"features": ["resultado", "margem de gols", "mando ponderado"], "parameters": {"k": "adaptativo", "margin_multiplier": True}, "training_window": {"since": "2000-01-01 (seleções)", "note": "3 anos para ligas"}},
     "poisson": {"features": ["média da liga", "ataque × defesa", "vantagem de mando"], "parameters": {"lambda_bounds": [0.15, 5.0]}},
+    "poisson_v2": {"features": ["λ = μ·att·def·HA com ratings strength-v2"], "parameters": {"lambda_bounds": [0.15, 5.0]}},
     "dixon_coles": {"features": ["ataque", "defesa", "γ mando", "ρ placares baixos"], "parameters": {"xi_per_day": 0.0018, "min_matches": 150, "optimizer": "L-BFGS-B"}, "training_window": {"note": "todas as partidas < as_of no dataset (peso exp(-ξ·dias))"}},
     "bivariate_poisson": {"features": ["ataque", "defesa", "γ mando", "λ3 covariância"], "parameters": {"xi_per_day": 0.0018, "min_matches": 150, "lambda3": "MLE 1-D com marginais fixas"}},
     "ensemble": {"features": ["matrizes de placar dos modelos disponíveis"], "parameters": {"weights": "walk-forward log loss (exp(-25·Δ))", "min_weight_sample": 200}},
@@ -34,6 +37,15 @@ SPECS: dict[str, dict] = {
 }
 
 
+# Champion/Challenger: a produção decide com o campeão; challengers aparecem na comparação
+# mas não entram no consenso até a regra de promoção (validation/governance.py) ser cumprida.
+DEFAULT_ROLES: dict[str, str] = {
+    "ensemble": "champion", "poisson": "champion", "dixon_coles": "champion", "bivariate_poisson": "champion",
+    "poisson_v2": "challenger", "strength_v2": "challenger", "international_strength": "challenger",
+    "elo": "baseline",
+}
+
+
 def sync_registry(session: Session) -> dict:
     existing = {(r.model_id, r.version): r for r in session.execute(select(ModelRegistry)).scalars()}
     created = 0
@@ -43,13 +55,15 @@ def sync_registry(session: Session) -> dict:
         if row is None:
             row = ModelRegistry(
                 model_id=model_id, version=version, features=spec.get("features"), parameters=spec.get("parameters"),
-                training_window=spec.get("training_window"), active=True, deprecated=False,
+                training_window=spec.get("training_window"), active=True, deprecated=False, role=DEFAULT_ROLES.get(model_id, "none"),
             )
             session.add(row)
             created += 1
         else:
             row.active = True
             row.deprecated = False
+        if not row.role:
+            row.role = DEFAULT_ROLES.get(model_id, "none")
     for (model_id, version), row in existing.items():
         if versions.ALL_MODELS.get(model_id) != version:
             row.active = False
@@ -64,7 +78,7 @@ def registry_rows(session: Session) -> list[dict]:
     return [
         {
             "id": r.id, "model_id": r.model_id, "version": r.version, "created_at": r.created_at, "training_window": r.training_window,
-            "features": r.features, "parameters": r.parameters, "metrics": r.metrics, "active": r.active, "deprecated": r.deprecated, "notes": r.notes,
+            "features": r.features, "parameters": r.parameters, "metrics": r.metrics, "active": r.active, "deprecated": r.deprecated, "notes": r.notes, "role": r.role,
         }
         for r in rows
     ]

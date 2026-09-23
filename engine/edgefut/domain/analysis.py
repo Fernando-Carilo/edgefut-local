@@ -76,6 +76,7 @@ class TeamProfile(BaseModel):
     strength_score: float | None = None  # 0-100
     attack: float | None = None
     defense: float | None = None
+    ratings_v2: dict | None = None  # strength-v2: attack/defense pooled, home_*/away_*, strength_of_schedule, effective_matches
     form: list[str] = Field(default_factory=list)  # mais recente primeiro
     recent: list[RecentMatch] = Field(default_factory=list)
     windows: dict[str, WindowStats] = Field(default_factory=dict)

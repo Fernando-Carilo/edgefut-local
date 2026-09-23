@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     bootstrap_resamples: int = 1000
     # decaimento temporal do strength-v2 (meia-vida em dias); escolhido por walk-forward
     # (validation/decay.py) — não por gosto. None → sem decaimento.
-    strength_half_life_days: float | None = 180.0
+    strength_half_life_days: float | None = 365.0  # walk-forward 2022-2026, 10 ligas, 13.365 jogos: 365 ≈ 180 > 730 > none > 90 > 60 > 30
     # estados de VALUE exigem OOS: mínimo de apostas liquidadas no mercado para permitir VALUE
     value_min_oos_bets: int = 100
 

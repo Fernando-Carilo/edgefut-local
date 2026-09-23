@@ -46,7 +46,9 @@ from ..models.counts import cards_engine, corners_engine, shots_engine
 from ..models.dixon_coles import dc_cache, dixon_coles_output, fit_dixon_coles
 from ..models.bivariate_poisson import bivariate_output, bp_cache, fit_bivariate_poisson
 from ..models.calibration import Calibrator, load_calibrators
-from ..models.ensemble import compare, load_weights
+from ..models.ensemble import CHAMPION_MEMBERS, compare, load_weights
+from ..models.international_strength import fit_international, international_output
+from ..models.strength_v2 import fit_strength_v2, strength_v2_output, sv2_cache
 from ..models.elo import elo_cache, elo_output, fit_elo
 from ..models.poisson import poisson_model
 from ..normalization import CompetitionProfile, classify_competition, is_womens
@@ -56,6 +58,7 @@ from ..providers.historical import get_store
 from ..quality import conflicts_for_event, record_conflict
 from ..recommendations import compute_confidence, evaluate
 from ..simulation.monte_carlo import simulate
+from ..validation.governance import current_champion
 
 log = logging.getLogger(__name__)
 
@@ -198,6 +201,7 @@ def invalidate_cache() -> None:
     elo_cache.clear()
     dc_cache.clear()
     bp_cache.clear()
+    sv2_cache.clear()
     _calibrators = None
     _ctx_cache.clear()
 
@@ -269,6 +273,16 @@ def _team_profile(name: str, match, df: pd.DataFrame, la, is_home: bool, elo: fl
             field="hg, ag, hs, hst, hc, hy, hr",
         ),
     )
+
+
+def _attach_ratings_v2(home: TeamProfile, away: TeamProfile, params, home_c: str | None, away_c: str | None) -> None:
+    if params is None:
+        return
+    for prof, canon in ((home, home_c), (away, away_c)):
+        if canon and canon in params.ratings:
+            prof.ratings_v2 = params.ratings[canon].to_dict()
+            prof.ratings_v2["home_advantage"] = round(params.home_advantage, 3)
+            prof.ratings_v2["half_life_days"] = params.half_life_days
 
 
 def analyze_event(
@@ -392,9 +406,24 @@ def analyze_event(
     bp_params = bp_cache.get(bp_key, lambda: fit_bivariate_poisson(comp_df)) if codes and not comp_df.empty else None
     bp = bivariate_output(bp_params, resolved.home.canonical, resolved.away.canonical, venue.home_advantage_weight)
 
-    # ---- comparação de modelos + consenso (ensemble-v1) ------------------------
+    # strength-v2 (opponent-adjusted) — clubes: fit por competição; seleções: international-strength-v1
+    sv2_key = ("sv2", tuple(codes), len(comp_df), profile.is_national_teams)
+    if codes and not comp_df.empty:
+        if profile.is_national_teams:
+            sv2_params = sv2_cache.get(sv2_key, lambda: fit_international(comp_df, reference_date=as_of))
+            pv2 = international_output(sv2_params, resolved.home.canonical, resolved.away.canonical, venue.home_advantage_weight, row.competition_name)
+        else:
+            sv2_params = sv2_cache.get(sv2_key, lambda: fit_strength_v2(comp_df, reference_date=as_of, group_col="season"))
+            pv2 = strength_v2_output(sv2_params, resolved.home.canonical, resolved.away.canonical, venue.home_advantage_weight)
+    else:
+        sv2_params, pv2 = None, strength_v2_output(None, None, None, 1.0)
+    _attach_ratings_v2(home, away, sv2_params, resolved.home.canonical, resolved.away.canonical)
+
+    # ---- comparação de modelos + consenso (campeão: ensemble | ensemble_v2) -----
+    champion = current_champion(session)
     comparison, consensus, cons_matrix = compare(
-        poisson=poisson, dixon_coles=dc, bivariate=bp, weights=load_weights(session, codes[0] if codes else None),
+        poisson=poisson, dixon_coles=dc, bivariate=bp, poisson_v2=pv2, champion=champion,
+        weights=load_weights(session, codes[0] if codes else None),
     )
     disagreement = comparison.max_disagreement_pp
 
@@ -434,7 +463,8 @@ def analyze_event(
         dc_available=dc.available,
     )
     calibration, cal_n = market_calibration(session)
-    n_models = sum(1 for m in (poisson, dc, bp) if m is not None and m.available)
+    members = CHAMPION_MEMBERS.get(champion, CHAMPION_MEMBERS["ensemble"])
+    n_models = sum(1 for k, m in (("poisson", poisson), ("dixon_coles", dc), ("bivariate_poisson", bp), ("poisson_v2", pv2)) if k in members and m is not None and m.available)
     conf = compute_confidence(
         data_quality=dq, home=home, away=away, venue=venue, model_disagreement_pp=disagreement,
         market_calibration=calibration.get("1X2") if calibration else None, calibration_samples=cal_n,
