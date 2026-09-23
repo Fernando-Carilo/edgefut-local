@@ -15,6 +15,16 @@ from edgefut.recommendations.opportunity import COMPONENT_LABELS, OpportunityInp
 from edgefut.recommendations.why import assert_no_guarantee_language
 from edgefut.simulation.monte_carlo import simulate
 
+import pytest
+from edgefut.db.migrations import run_migrations
+from edgefut.db.session import get_engine
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _db():
+    # evidence_level lê a tabela `setting`; garante o esquema quando o módulo roda isolado
+    run_migrations(get_engine())
+
 
 def test_edge_and_ev_formulas():
     edge, ev = edge_and_ev(0.55, 0.50, 2.0)
