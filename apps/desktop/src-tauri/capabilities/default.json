@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissões mínimas da janela principal",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:allow-open-url",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [{ "name": "binaries/edgefut-engine", "sidecar": true, "args": ["--port", { "validator": "^[0-9]{4,5}$" }] }]
+    }
+  ]
+}

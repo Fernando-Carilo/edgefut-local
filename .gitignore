@@ -44,3 +44,4 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 Thumbs.db
 *.log
+dist/
