@@ -444,3 +444,4 @@ class MatchAnalysis(BaseModel):
     exposure: dict | None = None  # ExposureView.to_dict(): LOW | MEDIUM | HIGH
     states: dict[str, int] = Field(default_factory=dict)  # contagem de seleções por estado
     champion: str | None = None  # consenso que decidiu (ensemble | ensemble_v2)
+    changes: dict | None = None  # WHY MODEL CHANGED: comparação com o snapshot anterior (analysis.changes)

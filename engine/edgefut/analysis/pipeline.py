@@ -62,6 +62,7 @@ from ..recommendations import compute_confidence, evaluate
 from ..recommendations.correlation import views_from
 from ..simulation.monte_carlo import simulate
 from ..validation.governance import current_champion
+from .changes import why_model_changed
 
 log = logging.getLogger(__name__)
 
@@ -608,6 +609,11 @@ def analyze_event(
     analysis.event.no_bet_reason = verdict.reason
     best = next((r for r in recs if r.status == "RECOMMENDED"), None)
     analysis.event.best_market = f"{best.market_label}: {best.selection_name}" if best else None
+    try:
+        analysis.changes = why_model_changed(session, event_id, analysis)
+    except Exception as exc:  # noqa: BLE001 — explicação nunca derruba a análise
+        log.warning("why_model_changed falhou para evento %s: %s", event_id, exc)
+        analysis.changes = {"status": "UNAVAILABLE", "drivers": [], "selections": [], "text": str(exc)}
 
     if save_snapshot and row.kickoff_utc > datetime.utcnow():
         analysis.snapshot_id = _save_snapshot(session, row, analysis)

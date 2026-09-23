@@ -54,6 +54,30 @@ def state_label(state: str | None, model_prob: float) -> str | None:
     return None
 
 
+EXTREME_PROB = 0.90
+EXTREME_STRONG_TEAM_SAMPLE = 30  # jogos na menor amostra de time para sustentar > 90 %
+
+
+def extreme_probability_guard(model_prob: float, min_sample: int, hist: dict | None) -> dict | None:
+    """§37 — probabilidades > 90 % exigem amostra forte. Nunca truncamos a probabilidade:
+    a penalidade cai sobre a confiança (fator multiplicativo) e fica registrada como motivo.
+
+    Amostra forte = menor amostra de time ≥ `EXTREME_STRONG_TEAM_SAMPLE` **e** o mercado tem
+    histórico settled ≥ `settings.sample_moderate_min` (quando há histórico)."""
+    if model_prob <= EXTREME_PROB:
+        return None
+    hist_n = int((hist or {}).get("n") or 0)
+    team_ok = min_sample >= EXTREME_STRONG_TEAM_SAMPLE
+    market_ok = hist_n >= settings.sample_moderate_min
+    if team_ok and market_ok:
+        return None
+    factor = 0.85 if team_ok or market_ok else 0.7
+    return {
+        "model_prob": round(model_prob, 4), "confidence_factor": factor, "team_sample": min_sample,
+        "team_sample_min": EXTREME_STRONG_TEAM_SAMPLE, "market_settled_n": hist_n, "market_settled_min": settings.sample_moderate_min,
+    }
+
+
 def oos_check(market_key: str, oos: dict[str, dict] | None) -> tuple[str, dict]:
     """CALIBRATION / OOS CHECK: o mercado tem prova out-of-sample suficiente?
 
@@ -198,9 +222,15 @@ def evaluate(
             if market.market_key in WATCH_ONLY_MARKETS:
                 conf_score *= 0.6
                 reasons.append("mercado de alta variância / aproximação")
+            # §37 — probabilidade extrema: a probabilidade NÃO é truncada; a confiança paga o preço
+            # quando a amostra não sustenta uma afirmação tão forte.
+            hist = historical.get(market.market_key) or {}
+            extreme = extreme_probability_guard(mp, min_sample, hist)
+            if extreme is not None:
+                conf_score *= extreme["confidence_factor"]
+                reasons.append("EXTREME_PROBABILITY")
             grade = grade_for(conf_score)
             cal_quality = market_calibration.get(market.market_key)
-            hist = historical.get(market.market_key) or {}
             opp = compute_opportunity(
                 OpportunityInputs(
                     confidence_score=conf_score, data_quality=data_quality.score, edge_pp=edge_pp, ev_pct=ev_pct,

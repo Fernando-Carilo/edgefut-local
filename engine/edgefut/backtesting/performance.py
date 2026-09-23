@@ -6,6 +6,7 @@ import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta
 
+import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -182,19 +183,44 @@ def _result_from_history(store, ev: Event, session: Session) -> MatchResult | No
 MIN_SAMPLE_FOR_METRICS = 30  # abaixo disso a métrica é exibida como INSUFFICIENT SAMPLE
 
 
+SECONDARY_MARKETS = {"TOTAL_CORNERS": "Escanteios", "TOTAL_CARDS": "Cartões", "TOTAL_SHOTS": "Finalizações", "TEAM_SHOTS": "Finalizações (time)"}
+
+
+def _roi_ci(records: list[BetRecord]) -> dict | None:
+    """IC 95 % bootstrap do ROI (por aposta, stake 1) — None abaixo de 10 apostas."""
+    if len(records) < 10:
+        return None
+    from ..validation.bootstrap import bootstrap_ci, roi_stat
+
+    profits = np.array([(r.odd - 1.0) if r.won else -1.0 for r in records], dtype=float)
+    return bootstrap_ci(profits, roi_stat, zero_test=True, min_n=10).to_dict()
+
+
 def _group_metrics(records: list[BetRecord]) -> dict:
     d = asdict(compute_metrics(records))
     d.pop("equity_curve", None)
     d["sample_status"] = "OK" if len(records) >= MIN_SAMPLE_FOR_METRICS else "INSUFFICIENT_SAMPLE"
     d["min_sample"] = MIN_SAMPLE_FOR_METRICS
+    d["roi_ci"] = _roi_ci(records)
+    try:
+        from ..validation.bootstrap import sample_quality
+
+        d["sample_quality"] = sample_quality(len(records))
+    except Exception:  # noqa: BLE001
+        d["sample_quality"] = None
     return d
 
 
 def performance_report(session: Session) -> dict:
     snaps = session.execute(select(PredictionSnapshot).where(PredictionSnapshot.result.is_not(None)).order_by(PredictionSnapshot.created_at.asc())).scalars().all()
     records: list[BetRecord] = []
+    primaries: list[BetRecord] = []
+    alternatives: list[BetRecord] = []
     all_1x2: list[BetRecord] = []
+    secondary: dict[str, list[BetRecord]] = {k: [] for k in SECONDARY_MARKETS}
     by_comp_records: dict[str, list[BetRecord]] = {}
+    by_cluster_records: dict[str, list[BetRecord]] = {}
+    by_state_records: dict[str, list[BetRecord]] = {}
     for s in snaps:
         outcomes = (s.result or {}).get("outcomes") or {}
         closing = s.closing_odds or {}
@@ -206,18 +232,35 @@ def performance_report(session: Session) -> dict:
                 prob=float(r["model_prob"]), odd=float(r["odd"]), won=bool(outcomes[key]), edge_pp=r.get("edge_pp"),
                 market_key=r["market_key"], label=r["market_label"], closing_odd=_closing_for(closing, key),
             )
+            is_primary = bool(r.get("is_primary", True))  # snapshots anteriores à iteração 3 não têm cluster → tratados como primárias
             if r.get("status") == "RECOMMENDED":
                 records.append(rec)
                 by_comp_records.setdefault(s.competition_name or "—", []).append(rec)
+                (primaries if is_primary else alternatives).append(rec)
+                if is_primary:
+                    by_cluster_records.setdefault(r.get("cluster_id") or "UNCLUSTERED", []).append(rec)
+                by_state_records.setdefault(r.get("state") or "LEGACY", []).append(rec)
             if r["market_key"] == "1X2":
                 all_1x2.append(rec)
+            # mercados secundários: toda seleção com modelo (não só RECOMMENDED) — performance do modelo, não da aposta
+            if r["market_key"] in secondary and r.get("model_prob"):
+                secondary[r["market_key"]].append(rec)
     by_market = {mk: _group_metrics([r for r in records if r.market_key == mk]) for mk in sorted({r.market_key for r in records if r.market_key})}
     by_competition = {c: _group_metrics(recs) for c, recs in sorted(by_comp_records.items(), key=lambda kv: -len(kv[1]))}
+    by_cluster = {c: _group_metrics(recs) for c, recs in sorted(by_cluster_records.items(), key=lambda kv: -len(kv[1]))}
+    by_state = {c: _group_metrics(recs) for c, recs in sorted(by_state_records.items(), key=lambda kv: -len(kv[1]))}
     overall = asdict(compute_metrics(records))
     curve = overall.pop("equity_curve", [])
     overall["sample_status"] = "OK" if len(records) >= MIN_SAMPLE_FOR_METRICS else "INSUFFICIENT_SAMPLE"
+    overall["roi_ci"] = _roi_ci(records)
     model_only = _group_metrics(all_1x2)
     with_clv = sum(1 for r in records if r.closing_odd)
+    secondary_out = {}
+    for mk, recs in secondary.items():
+        g = _group_metrics(recs)
+        g["label"] = SECONDARY_MARKETS[mk]
+        g["verdict"] = "INSUFFICIENT" if len(recs) < MIN_SAMPLE_FOR_METRICS else ("PROMISING" if (g.get("roi_ci") or {}).get("low", -1) is not None and (g.get("roi_ci") or {}).get("low", -1) > 0 else "NO CLEAR ADVANTAGE")
+        secondary_out[mk] = g
     return {
         "generated_at": datetime.utcnow().isoformat(),
         "settled_snapshots": len(snaps),
@@ -228,6 +271,16 @@ def performance_report(session: Session) -> dict:
         "by_market": by_market,
         "by_competition": by_competition,
         "model_1x2_all_selections": model_only,
+        # Iteração 3 — sem duplicidade: uma primária por tese; alternativas medidas à parte
+        "selection_vs_cluster": {
+            "all_selections": _group_metrics(records),
+            "primaries_only": _group_metrics(primaries),
+            "alternatives_only": _group_metrics(alternatives),
+            "note": "Performance oficial = primárias. Alternativas da mesma tese (DNB, DC, handicap…) inflam N sem adicionar informação.",
+        },
+        "by_cluster": by_cluster,
+        "by_state": by_state,
+        "secondary_markets": secondary_out,
         "min_sample": MIN_SAMPLE_FOR_METRICS,
         "note": (
             "Métricas calculadas apenas sobre snapshots gravados ANTES do jogo e liquidados com o resultado real. "

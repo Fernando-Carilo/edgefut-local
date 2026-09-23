@@ -51,10 +51,14 @@ def why_bet(rec: Recommendation, ctx: WhyContext) -> list[str]:
         out.append("Evidência BACKTEST_ODDS: dataset com odds históricas reais — o edge pode ser verificado no Backtest Lab.")
     else:
         out.append("Evidência MODEL_ONLY: sem odds históricas nesta competição; o modelo nunca foi comparado ao mercado aqui. Trate o edge como hipótese.")
-    if rec.label == "HIGH_PROBABILITY":
-        out.append("Rótulo HIGH PROBABILITY: probabilidade alta, não sinônimo de valor — o edge é o que justifica a entrada.")
+    if rec.label in ("HIGH_PROBABILITY", "MODEL_FAVORITE"):
+        out.append("Rótulo MODEL FAVORITE: probabilidade alta, não sinônimo de valor — o edge é o que justifica a entrada.")
     elif rec.label == "VALUE":
         out.append("Rótulo VALUE: o valor está na diferença entre modelo e mercado, não na probabilidade absoluta.")
+    elif rec.label == "VALUE_CANDIDATE":
+        out.append("Rótulo VALUE CANDIDATE: passou no gate, mas este mercado ainda não tem prova out-of-sample suficiente para ser chamado de VALUE.")
+    if "EXTREME_PROBABILITY" in rec.reasons:
+        out.append(f"Probabilidade extrema ({_pct(rec.model_prob, 0)}) com amostra insuficiente para sustentá-la: confiança penalizada, probabilidade não truncada.")
     return out
 
 
@@ -84,6 +88,8 @@ def why_not(rec: Recommendation, ctx: WhyContext, gate: QualityGate | None) -> l
         elif r == "OOS_NEGATIVE":
             o = rec.oos or {}
             out.append(f"Prova out-of-sample negativa neste mercado (N={o.get('n')}, ROI IC 95% [{o.get('roi_low')}, {o.get('roi_high')}]): o edge existe no papel, mas o histórico não confirma.")
+        elif r == "EXTREME_PROBABILITY":
+            out.append(f"Probabilidade extrema ({rec.model_prob:.0%}) sem amostra forte que a sustente: a probabilidade não foi truncada, mas a confiança foi penalizada.")
         elif r.startswith("ALTERNATIVE_OF:"):
             out.append(f"Alternativa da mesma tese que {r.split(':', 1)[1].replace('/', ' · ')} — não é uma oportunidade adicional.")
         elif r in ("STALE_DATA", "MODEL_DISAGREEMENT", "SMALL_SAMPLE", "LOW_DATA", "UNSUPPORTED_COMPETITION", "UNRELIABLE_SOURCE"):
