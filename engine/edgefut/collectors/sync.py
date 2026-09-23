@@ -348,7 +348,12 @@ def odds_history_map(session: Session, event_id: int, before: datetime | None = 
 
 
 def latest_odds_rows(session: Session, event_id: int) -> tuple[list[dict], dict[tuple, float], datetime | None, str | None]:
-    """Retorna (linhas atuais, preços de abertura, collected_at, source_url)."""
+    """Retorna (linhas atuais, preços de abertura, collected_at, source_url).
+
+    `collected_at` é a última CONFIRMAÇÃO dos preços na fonte (`Event.odds_collected_at`), não a
+    última mudança de preço: snapshots idênticos não são duplicados, então o timestamp do último
+    snapshot subestima o frescor real. Os pontos de movimento continuam usando as mudanças reais.
+    """
     rows = session.execute(
         select(OddsSnapshot).where(OddsSnapshot.event_id == event_id).order_by(OddsSnapshot.collected_at.asc())
     ).scalars().all()
@@ -361,6 +366,9 @@ def latest_odds_rows(session: Session, event_id: int) -> tuple[list[dict], dict[
     if not latest:
         return [], {}, None, None
     max_ts = max(r.collected_at for r in latest.values())
+    ev = session.get(Event, event_id)
+    if ev is not None and ev.odds_collected_at is not None and ev.odds_collected_at > max_ts:
+        max_ts = ev.odds_collected_at
     # odds "atuais" = presentes na última coleta (mercados removidos pela casa somem)
     current = [
         {

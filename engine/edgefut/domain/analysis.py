@@ -245,18 +245,61 @@ class MarketOdds(BaseModel):
     source_url: str | None = None
 
 
+ConfidenceGroup = Literal["DATA_QUALITY", "MODEL_AGREEMENT", "CALIBRATION", "HISTORICAL_SAMPLE", "FRESHNESS", "CONTEXT"]
+
+
 class ConfidenceComponent(BaseModel):
     name: str
     weight: float
     value: float  # 0-1
     note: str | None = None
+    group: ConfidenceGroup = "CONTEXT"
 
 
 class ConfidenceBreakdown(BaseModel):
+    """EDGEFUT CONFIDENCE 0-100: indicador central, sempre com breakdown por grupo."""
+
     model_version: str
     score: float
     grade: Grade
     components: list[ConfidenceComponent]
+    groups: dict[str, float] = Field(default_factory=dict)  # grupo → 0-100 (média ponderada dos componentes)
+
+
+class ScoreComponent(BaseModel):
+    key: str
+    label: str
+    weight: float
+    value: float  # 0-1
+    note: str | None = None
+
+
+class OpportunityBreakdown(BaseModel):
+    model_version: str
+    score: float  # 0-100
+    components: list[ScoreComponent]
+
+
+class QualityGateCheck(BaseModel):
+    key: str
+    label: str
+    passed: bool
+    detail: str | None = None
+
+
+class QualityGate(BaseModel):
+    passed: bool
+    checks: list[QualityGateCheck]
+    failed: list[str] = Field(default_factory=list)  # keys que falharam
+
+
+OpportunityLabel = Literal["HIGH_PROBABILITY", "VALUE", "HIGH_PROBABILITY_VALUE"]
+
+# Nível de evidência de que o modelo bate o MERCADO nesta competição:
+#   SETTLED       — apostas reais liquidadas (N>=30) com ROI/CLV medidos
+#   BACKTEST_ODDS — dataset com odds históricas reais → backtest modelo × mercado possível
+#   MODEL_ONLY    — só há evidência probabilística (logloss); nunca comparado com odds reais
+EvidenceLevel = Literal["SETTLED", "BACKTEST_ODDS", "MODEL_ONLY"]
 
 
 class DataQualityCheck(BaseModel):
@@ -293,6 +336,13 @@ class Recommendation(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     explanation: str | None = None
     category: Literal["GOLS", "RESULTADO", "ESCANTEIOS", "CARTOES", "FINALIZACOES", "JOGADOR", "OUTRO"] = "OUTRO"
+    # Iteração 2 — Radar V2
+    label: OpportunityLabel | None = None  # SAFE ≠ VALUE: alta probabilidade e valor são coisas diferentes
+    opportunity: OpportunityBreakdown | None = None
+    quality_gate: QualityGate | None = None
+    why: list[str] = Field(default_factory=list)  # WHY THIS BET — fatos, sem linguagem de garantia
+    why_not: list[str] = Field(default_factory=list)  # WHY NOT — por que não entrou/ficou em observação
+    evidence: EvidenceLevel | None = None
 
 
 class NoBetVerdict(BaseModel):
@@ -362,3 +412,6 @@ class MatchAnalysis(BaseModel):
     conflicts: list[ConflictOut] = Field(default_factory=list)
     conflicts_count: int = 0
     canonical_event_id: str | None = None
+    why_not: list[str] = Field(default_factory=list)  # motivos do NO BET a nível de evento (WHY NOT)
+    quality_gate_passed: bool = False  # alguma seleção RECOMMENDED passou no quality gate
+    evidence: EvidenceLevel | None = None  # evidência modelo × mercado para a competição

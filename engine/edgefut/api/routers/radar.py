@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...analysis.pipeline import all_cached, event_summary
 from ...core.config import settings
-from ...db.models import Event, Favorite, PredictionSnapshot
+from ...db.models import Alert, Event, Favorite, PredictionSnapshot
 from ...db.session import get_session
 from ...domain.analysis import MatchAnalysis, Recommendation
+from ...domain.freshness import describe_age
 from ...scheduler import jobs
-from ..schemas import DashboardResponse, EntriesResponse, EntryRow, RadarCard, RadarItem, RadarResponse
+from ..schemas import DashboardResponse, EntriesResponse, EntryRow, RadarCard, RadarItem, RadarResponse, RadarSummary
 from .events import main_odds_for, window_bounds
 
 router = APIRouter(tags=["radar"])
+
+DATA_NO_BET = {"UNSUPPORTED_COMPETITION", "LOW_DATA", "SMALL_SAMPLE", "UNRELIABLE_SOURCE", "STALE_DATA"}
 
 
 def _upcoming(analyses: list[MatchAnalysis], hours: int = 48) -> list[MatchAnalysis]:
@@ -31,10 +35,16 @@ def _best(a: MatchAnalysis, category: str | None = None, statuses=("RECOMMENDED"
 
 
 def _item(a: MatchAnalysis, rec: Recommendation | None) -> RadarItem:
+    if rec is not None:
+        why = (rec.why if rec.status == "RECOMMENDED" else rec.why_not)[:2]
+    else:
+        why = a.why_not[:2]
     return RadarItem(
         event=a.event, recommendation=rec, opportunity_score=rec.opportunity_score if rec else a.opportunity_score,
         confidence_grade=rec.confidence_grade if rec else a.confidence.grade, data_quality=a.data_quality.score,
-        no_bet_reason=a.no_bet.reason,
+        no_bet_reason=a.no_bet.reason, label=rec.label if rec else None,
+        quality_gate_passed=bool(rec and rec.quality_gate and rec.quality_gate.passed),
+        freshness_status=a.freshness_status, evidence=a.evidence, why=why,
     )
 
 
@@ -47,41 +57,102 @@ def _maybe_refresh(analyses: list[MatchAnalysis]) -> bool:
     return bool(st["radar_running"])
 
 
+def _events_found(session: Session, hours: int) -> int:
+    now = datetime.utcnow()
+    return int(
+        session.execute(
+            select(func.count()).select_from(Event).where(
+                Event.kickoff_utc > now - timedelta(hours=2), Event.kickoff_utc < now + timedelta(hours=hours), Event.duplicate_of.is_(None),
+            )
+        ).scalar() or 0
+    )
+
+
+def _alerts_unread(session: Session) -> int:
+    return int(session.execute(select(func.count()).select_from(Alert).where(Alert.read_at.is_(None))).scalar() or 0)
+
+
+def summarize(session: Session, analyses: list[MatchAnalysis], hours: int) -> RadarSummary:
+    st = jobs.state()
+    gate = sum(1 for a in analyses if a.quality_gate_passed)
+    a_count = b_count = high = value = watch = no_bet = stale = 0
+    reasons: Counter[str] = Counter()
+    by_evidence: Counter[str] = Counter()
+    for a in analyses:
+        best = _best(a)
+        if best and a.quality_gate_passed:
+            by_evidence[a.evidence or "MODEL_ONLY"] += 1
+        if best:
+            if best.confidence_grade == "A":
+                a_count += 1
+            elif best.confidence_grade == "B":
+                b_count += 1
+            if best.label in ("HIGH_PROBABILITY", "HIGH_PROBABILITY_VALUE"):
+                high += 1
+            if best.label in ("VALUE", "HIGH_PROBABILITY_VALUE"):
+                value += 1
+        elif _best(a, statuses=("WATCH",)):
+            watch += 1
+        elif a.no_bet.no_bet:
+            # NO BET "puro": sem nada recomendado nem em observação (mesmo critério do card NO BET)
+            no_bet += 1
+            reasons[a.no_bet.reason or "NO_BET"] += 1
+        if a.freshness_status in ("STALE", "EXPIRED"):
+            stale += 1
+    return RadarSummary(
+        last_update=st.get("last_radar_refresh"), events_found=_events_found(session, hours),
+        with_sufficient_data=sum(1 for a in analyses if a.no_bet.reason not in DATA_NO_BET), analyzed=len(analyses),
+        quality_gate_passed=gate, confidence_a=a_count, confidence_b=b_count, high_probability=high, value=value,
+        watch=watch, no_bet=no_bet, stale=stale, alerts_unread=_alerts_unread(session), no_bet_by_reason=dict(reasons),
+        gate_passed_by_evidence=dict(by_evidence),
+    )
+
+
+def _thresholds() -> dict[str, float]:
+    return {
+        "min_edge_pp": settings.min_edge_pp, "min_ev_pct": settings.min_ev_pct, "min_odd": settings.min_odd, "max_odd": settings.max_odd,
+        "gate_min_data_quality": settings.gate_min_data_quality, "gate_min_confidence": settings.gate_min_confidence,
+        "gate_min_sample": settings.gate_min_sample, "gate_max_disagreement_pp": settings.gate_max_disagreement_pp,
+        "gate_max_edge_pp_uncalibrated": settings.gate_max_edge_pp_uncalibrated,
+        "high_probability_min": settings.high_probability_min,
+    }
+
+
 @router.get("/radar", response_model=RadarResponse)
-def radar(hours: int = Query(48, le=168)):
+def radar(hours: int = Query(48, le=168), session: Session = Depends(get_session)):
     analyses = _upcoming(all_cached(), hours)
     refreshing = _maybe_refresh(analyses)
     cards: list[RadarCard] = []
 
-    def card(key, title, subtitle, items):
-        items = sorted(items, key=lambda i: -i.opportunity_score)[:12]
+    def card(key, title, subtitle, items, sort_key=None):
+        items = sorted(items, key=sort_key or (lambda i: -i.opportunity_score))[:12]
         cards.append(RadarCard(key=key, title=title, subtitle=subtitle, items=items))
 
-    top = [_item(a, _best(a)) for a in analyses if _best(a) and _best(a).confidence_grade in ("A", "B")]  # type: ignore[union-attr]
-    card("top", "TOP OPORTUNIDADES", "Maior Opportunity Score com confiança A/B", top)
-    card("high_confidence", "ALTA CONFIANÇA", "Confiança A", [_item(a, _best(a)) for a in analyses if _best(a) and _best(a).confidence_grade == "A"])  # type: ignore[union-attr]
+    def gated(a: MatchAnalysis, category: str | None = None) -> Recommendation | None:
+        r = _best(a, category)
+        return r if r and r.quality_gate and r.quality_gate.passed else None
+
+    # TOP: só quem passou no quality gate (RECOMMENDED já implica isso; a checagem é explícita).
+    top = [_item(a, gated(a)) for a in analyses if gated(a)]
+    card("top", "TOP OPORTUNIDADES", "Passaram no quality gate · ordenadas por Opportunity Score V2", top)
+    card("high_probability", "HIGH PROBABILITY", f"Probabilidade do modelo ≥ {settings.high_probability_min:.0%} — não confundir com valor", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).label in ("HIGH_PROBABILITY", "HIGH_PROBABILITY_VALUE")])  # type: ignore[union-attr]
+    card("valor", "VALUE", f"Edge ≥ {settings.min_edge_pp:.0f} pp e EV ≥ {settings.min_ev_pct:.0f}% — o valor está na diferença modelo × mercado", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).label in ("VALUE", "HIGH_PROBABILITY_VALUE")])  # type: ignore[union-attr]
+    card("high_confidence", "ALTA CONFIANÇA", "Confiança A", [_item(a, gated(a)) for a in analyses if gated(a) and gated(a).confidence_grade == "A"])  # type: ignore[union-attr]
     for key, title, cat in (("gols", "GOLS", "GOLS"), ("escanteios", "ESCANTEIOS", "ESCANTEIOS"), ("cartoes", "CARTÕES", "CARTOES"), ("finalizacoes", "FINALIZAÇÕES", "FINALIZACOES")):
-        items = []
-        for a in analyses:
-            r = _best(a, cat)
-            if r and r.confidence_grade in ("A", "B"):
-                items.append(_item(a, r))
-        card(key, title, f"Melhor seleção de {title.lower()} por jogo", items)
-    valor = []
-    for a in analyses:
-        r = _best(a)
-        if r and r.ev_pct >= settings.min_ev_pct * 2 and r.confidence_grade in ("A", "B"):
-            valor.append(_item(a, r))
-    card("valor", "VALOR", f"EV ≥ {settings.min_ev_pct * 2:.0f}%", valor)
+        items = [_item(a, gated(a, cat)) for a in analyses if gated(a, cat)]
+        card(key, title, f"Melhor seleção de {title.lower()} por jogo (quality gate)", items)
     obs = []
     for a in analyses:
-        r = _best(a, statuses=("WATCH",)) or (_best(a) if _best(a) and _best(a).confidence_grade == "C" else None)  # type: ignore[union-attr]
-        if r:
+        r = _best(a, statuses=("WATCH",))
+        if r and not gated(a):
             obs.append(_item(a, r))
-    card("observacao", "EM OBSERVAÇÃO", "Confiança C ou limiares parcialmente atendidos", obs)
+    card("observacao", "EM OBSERVAÇÃO", "Edge existe, mas reprovou no quality gate ou é mercado de alta variância / confiança C", obs)
     no_bet = [_item(a, None) for a in analyses if a.no_bet.no_bet and not _best(a, statuses=("WATCH",))]
-    card("no_bet", "NO BET", "Jogos em que o sistema recomenda não entrar", sorted(no_bet, key=lambda i: i.event.kickoff_utc.timestamp()))
-    return RadarResponse(generated_at=datetime.utcnow(), analyzed_events=len(analyses), refreshing=refreshing, cards=cards)
+    card("no_bet", "NO BET", "Jogos em que o sistema recomenda não entrar — cada um com o motivo", no_bet, sort_key=lambda i: i.event.kickoff_utc.timestamp())
+    return RadarResponse(
+        generated_at=datetime.utcnow(), analyzed_events=len(analyses), refreshing=refreshing, cards=cards,
+        summary=summarize(session, analyses, hours), thresholds=_thresholds(),
+    )
 
 
 @router.get("/entries", response_model=EntriesResponse)
@@ -115,6 +186,38 @@ def entries(
     return EntriesResponse(rows=rows, total=len(rows))
 
 
+def morning_summary(name: str, s: RadarSummary, health_overall: str | None) -> str:
+    """Texto do workflow da manhã: números reais, sem promessa."""
+    if s.analyzed == 0:
+        if s.events_found == 0:
+            return f"{name}, a Superbet ainda não retornou jogos para as próximas 48 h. O radar tentará de novo no próximo ciclo."
+        return f"{name}, encontramos {s.events_found} jogos nas próximas 48 h e a primeira análise está rodando. Volte em alguns minutos."
+    parts = [f"{name}, analisamos {s.analyzed} de {s.events_found} jogos das próximas 48 h."]
+    if s.quality_gate_passed:
+        parts.append(f"{s.quality_gate_passed} passaram no quality gate ({s.confidence_a} com confiança A, {s.confidence_b} com B).")
+        model_only = s.gate_passed_by_evidence.get("MODEL_ONLY", 0)
+        if model_only:
+            parts.append(f"{model_only} deles em competições sem odds históricas (MODEL_ONLY): edge nunca verificado contra o mercado.")
+    else:
+        parts.append("Nenhum passou no quality gate hoje — isso é o sistema funcionando, não falhando.")
+    if s.watch:
+        parts.append(f"{s.watch} em observação.")
+    if s.no_bet:
+        top_reason = max(s.no_bet_by_reason.items(), key=lambda kv: kv[1])[0] if s.no_bet_by_reason else None
+        from ...explanations.templates import NO_BET_LABELS
+
+        reason_txt = f" (principal motivo: {NO_BET_LABELS.get(top_reason, top_reason)})" if top_reason else ""
+        parts.append(f"{s.no_bet} NO BET{reason_txt}.")
+    if s.stale:
+        parts.append(f"Atenção: {s.stale} análises com dados STALE/EXPIRED.")
+    if health_overall and health_overall != "HEALTHY":
+        parts.append(f"Saúde do sistema: {health_overall} — veja Diagnóstico.")
+    if s.last_update:
+        age = int((datetime.utcnow() - s.last_update).total_seconds())
+        parts.append(f"Última atualização {describe_age(age)}.")
+    return " ".join(parts)
+
+
 @router.get("/dashboard", response_model=DashboardResponse)
 def dashboard(session: Session = Depends(get_session)):
     analyses = _upcoming(all_cached(), 48)
@@ -123,17 +226,12 @@ def dashboard(session: Session = Depends(get_session)):
     analyzed_today = session.execute(
         select(PredictionSnapshot.event_id).where(PredictionSnapshot.created_at >= today_start).distinct()
     ).all()
-    a_count = b_count = discarded = 0
+    discarded = 0
     top: list[EntryRow] = []
     for a in analyses:
         best = _best(a)
-        if best:
-            if best.confidence_grade == "A":
-                a_count += 1
-            elif best.confidence_grade == "B":
-                b_count += 1
-            if best.confidence_grade in ("A", "B"):
-                top.append(EntryRow(event=a.event, recommendation=best))
+        if best and best.quality_gate and best.quality_gate.passed:
+            top.append(EntryRow(event=a.event, recommendation=best))
         discarded += sum(1 for r in a.recommendations if r.status == "NO_BET")
     top.sort(key=lambda x: -x.recommendation.opportunity_score)
     now = datetime.utcnow()
@@ -152,10 +250,22 @@ def dashboard(session: Session = Depends(get_session)):
     greeting = "Bom dia" if 5 <= hour < 12 else "Boa tarde" if 12 <= hour < 18 else "Boa noite"
     st = jobs.state()
     last = max((d for d in (st["last_events_sync"], st["last_odds_sync"], st["last_radar_refresh"]) if d), default=None)
+    summary = summarize(session, analyses, 48)
+    health_overall = None
+    try:
+        from ...quality.health import system_health
+
+        health_overall = system_health(session).overall
+    except Exception:  # noqa: BLE001 — diagnóstico é auxiliar; nunca derruba o dashboard
+        health_overall = None
+    name = _user_name(session)
     return DashboardResponse(
-        greeting=greeting, user_name=_user_name(session), analyzed_today=len(analyzed_today), confidence_a=a_count,
-        confidence_b=b_count, discarded_markets=discarded, last_update=last, top_opportunities=top[:8],
+        greeting=greeting, user_name=name, analyzed_today=len(analyzed_today), confidence_a=summary.confidence_a,
+        confidence_b=summary.confidence_b, discarded_markets=discarded, last_update=last, top_opportunities=top[:8],
         popular_events=popular, scheduler={k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in st.items()},
+        morning_summary=morning_summary(name, summary, health_overall), events_found=summary.events_found,
+        quality_gate_passed=summary.quality_gate_passed, watch=summary.watch, no_bet=summary.no_bet,
+        alerts_unread=summary.alerts_unread, health_overall=health_overall,
     )
 
 

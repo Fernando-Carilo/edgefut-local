@@ -46,6 +46,24 @@ class Settings(BaseSettings):
     max_odd: float = 6.00
     home_advantage_unconfirmed_weight: float = 0.5
 
+    # Quality Gate (TOP OPORTUNIDADES). Só o usuário altera; nunca são relaxados automaticamente
+    # ("não caçar entradas"). HARD_FLOORS abaixo impede que a UI vá além do razoável.
+    gate_min_data_quality: float = 60.0
+    gate_min_confidence: float = 65.0  # grade B
+    gate_min_sample: int = 15  # jogos da menor amostra entre as equipes
+    gate_max_disagreement_pp: float = 10.0
+    # Edge acima disso SEM calibrador confiável é mais provável erro do modelo do que do mercado.
+    gate_max_edge_pp_uncalibrated: float = 15.0
+    high_probability_min: float = 0.65  # rótulo HIGH PROBABILITY (não é "seguro")
+
+    # Opportunity Score V2 — pesos configuráveis (soma normalizada em runtime)
+    opportunity_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "model_confidence": 20, "data_quality": 15, "calibration_quality": 10, "edge": 15, "ev": 10,
+            "odds_freshness": 10, "model_agreement": 10, "historical_performance": 5, "sample_size": 5,
+        }
+    )
+
     # LLM opcional
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "llama3.1"
@@ -67,6 +85,17 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Pisos que nem a UI pode ultrapassar: relaxar abaixo disso é "caçar entradas".
+HARD_FLOORS: dict[str, float] = {
+    "min_edge_pp": 1.0,
+    "min_ev_pct": 1.0,
+    "gate_min_data_quality": 40.0,
+    "gate_min_confidence": 50.0,
+    "gate_min_sample": 10,
+    "high_probability_min": 0.55,
+}
+HARD_CEILINGS: dict[str, float] = {"gate_max_disagreement_pp": 15.0, "gate_max_edge_pp_uncalibrated": 25.0}
 
 if not settings.host_is_loopback:  # pragma: no cover - defesa em profundidade
     raise RuntimeError("EdgeFut engine só pode escutar em loopback (127.0.0.1).")

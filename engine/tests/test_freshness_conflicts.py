@@ -55,7 +55,7 @@ def test_expired_odds_block_recommendations():
     from edgefut.domain.analysis import CountDistribution
 
     empty = CountDistribution(model_version="t", available=False)
-    recs, verdict = evaluate(
+    recs, verdict, _ = evaluate(
         markets=[], sim=None, corners=empty, cards=empty, confidence=conf, data_quality=dq, supported=True,
         teams_resolved=True, min_sample=30, model_disagreement_pp=1.0, unreliable_source=False,
         stale_data="Odds coletadas há 7 h.",
@@ -116,3 +116,26 @@ def test_system_health_reports_states_without_network():
     sched = next(c for c in h.components if c.key == "scheduler")
     assert sched.status in {"UNAVAILABLE", "DEGRADED"}  # desligado nos testes: nunca reportado como HEALTHY
     assert h.overall in {"HEALTHY", "DEGRADED", "UNAVAILABLE", "STALE"}
+
+
+def test_odds_collected_at_is_last_confirmation_not_last_price_change():
+    """Snapshots idênticos não são duplicados; o frescor deve vir da última confirmação na fonte."""
+    from edgefut.collectors.sync import latest_odds_rows
+    from edgefut.db.models import OddsSnapshot
+
+    from edgefut.db.migrations import run_migrations
+
+    run_migrations(get_engine())
+    eid = 990_002
+    changed_at = datetime.utcnow() - timedelta(hours=3)
+    confirmed_at = datetime.utcnow() - timedelta(minutes=2)
+    with session_scope() as s:
+        s.add(Event(id=eid, home_name="A", away_name="B", kickoff_utc=datetime.utcnow() + timedelta(days=1), status="prematch", market_count=1, odds_collected_at=confirmed_at))
+        s.add(OddsSnapshot(event_id=eid, market_key="1X2", market_name="Resultado", selection_key="HOME", selection_name="1", line=None, price=2.0, status="active", source="superbet", collected_at=changed_at))
+        s.flush()
+        rows, opening, collected_at, _ = latest_odds_rows(s, eid)
+        assert rows and rows[0]["price"] == 2.0 and opening[("1X2", "HOME", None)] == 2.0
+        assert collected_at == confirmed_at
+        assert fresh.assess("odds", collected_at).status == "FRESH"
+        assert fresh.assess("odds", changed_at).status in ("STALE", "EXPIRED")
+        s.rollback()

@@ -13,7 +13,7 @@ MONTE_CARLO = "mc-v1"
 CORNERS = "corners-v1"
 CARDS = "cards-v1"
 SHOTS = "shots-v1"
-CONFIDENCE = "confidence-v1"
+CONFIDENCE = "confidence-v2"
 OPPORTUNITY = "opportunity-v2"
 PIPELINE = "pipeline-v2"
 

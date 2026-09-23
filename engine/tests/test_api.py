@@ -73,10 +73,31 @@ def test_models_and_sources(client):
 
 def test_radar_and_dashboard_shape(client):
     r = client.get("/radar").json()
-    assert {c["key"] for c in r["cards"]} >= {"top", "high_confidence", "gols", "escanteios", "cartoes", "finalizacoes", "valor", "observacao"}
+    assert {c["key"] for c in r["cards"]} >= {"top", "high_probability", "high_confidence", "gols", "escanteios", "cartoes", "finalizacoes", "valor", "observacao", "no_bet"}
+    s = r["summary"]
+    assert {"events_found", "with_sufficient_data", "analyzed", "quality_gate_passed", "confidence_a", "confidence_b", "high_probability", "value", "watch", "no_bet", "stale", "alerts_unread"} <= set(s)
+    assert s["analyzed"] == r["analyzed_events"] == 0  # banco vazio: contadores honestos
+    assert r["thresholds"]["gate_min_confidence"] >= 50
     d = client.get("/dashboard").json()
     assert d["user_name"] == "Fernando"
     assert d["greeting"] in {"Bom dia", "Boa tarde", "Boa noite"}
+    assert d["cta"] == "VER RADAR"
+    assert "Fernando" in d["morning_summary"] and ("ainda não retornou" in d["morning_summary"] or "primeira análise" in d["morning_summary"])
+    from edgefut.recommendations.why import assert_no_guarantee_language
+
+    assert_no_guarantee_language([d["morning_summary"]])
+
+
+def test_settings_floors_block_threshold_hunting(client):
+    r = client.put("/settings", json={"min_edge_pp": 0.1, "min_ev_pct": 0.0, "gate_min_confidence": 10, "gate_min_data_quality": 5, "gate_max_disagreement_pp": 80, "opportunity_weights": {"edge": 5, "bogus": 9, "ev": -3}})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["min_edge_pp"] >= 1.0 and b["min_ev_pct"] >= 1.0
+    assert b["gate_min_confidence"] >= 50 and b["gate_min_data_quality"] >= 40
+    assert b["gate_max_disagreement_pp"] <= 15
+    assert b["opportunity_weights"] == {"edge": 5.0, "ev": 0.0}
+    # volta ao padrão para não contaminar os outros testes
+    client.put("/settings", json={"user_name": "Fernando"})
 
 
 def test_chat_requires_analyzed_event(client):

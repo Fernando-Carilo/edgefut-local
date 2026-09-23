@@ -10,7 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...core import versions
-from ...core.config import settings
+from ...core.config import HARD_CEILINGS, HARD_FLOORS, Settings, settings
+from ...recommendations.opportunity import COMPONENT_LABELS
 from ...core.paths import get_paths
 from ...db.models import Competition, DatasetState, JobRun, Setting, SourceLog
 from ...db.session import get_session
@@ -313,13 +314,32 @@ def load_settings(session: Session) -> SettingsModel:
         ollama_enabled=settings.ollama_enabled, ollama_model=settings.ollama_model,
         events_refresh_min=settings.events_refresh_min, odds_refresh_min=settings.odds_refresh_min,
         margin_method=settings.margin_method, live_poll_seconds=settings.live_poll_seconds,  # type: ignore[arg-type]
+        gate_min_data_quality=settings.gate_min_data_quality, gate_min_confidence=settings.gate_min_confidence,
+        gate_min_sample=settings.gate_min_sample, gate_max_disagreement_pp=settings.gate_max_disagreement_pp,
+        gate_max_edge_pp_uncalibrated=settings.gate_max_edge_pp_uncalibrated,
+        high_probability_min=settings.high_probability_min, opportunity_weights=dict(settings.opportunity_weights),
     )
     if row and row.value:
-        return base.model_copy(update={k: v for k, v in row.value.items() if k in SettingsModel.model_fields})
+        return enforce_floors(base.model_copy(update={k: v for k, v in row.value.items() if k in SettingsModel.model_fields}))
     return base
 
 
+def enforce_floors(model: SettingsModel) -> SettingsModel:
+    """'Não caçar entradas': limiares nunca ficam abaixo dos pisos, venham da UI ou do disco."""
+    for key, floor in HARD_FLOORS.items():
+        if getattr(model, key) < floor:
+            setattr(model, key, type(getattr(model, key))(floor))
+    for key, ceil in HARD_CEILINGS.items():
+        if getattr(model, key) > ceil:
+            setattr(model, key, type(getattr(model, key))(ceil))
+    model.opportunity_weights = {k: max(0.0, float(v)) for k, v in (model.opportunity_weights or {}).items() if k in COMPONENT_LABELS}
+    if model.opportunity_weights and sum(model.opportunity_weights.values()) <= 0:
+        model.opportunity_weights = {}
+    return model
+
+
 def apply_settings(model: SettingsModel) -> None:
+    model = enforce_floors(model)
     settings.default_simulations = model.default_simulations
     settings.min_edge_pp = model.min_edge_pp
     settings.min_ev_pct = model.min_ev_pct
@@ -332,6 +352,16 @@ def apply_settings(model: SettingsModel) -> None:
     settings.odds_refresh_min = model.odds_refresh_min
     settings.margin_method = model.margin_method
     settings.live_poll_seconds = max(20, model.live_poll_seconds)
+    settings.gate_min_data_quality = model.gate_min_data_quality
+    settings.gate_min_confidence = model.gate_min_confidence
+    settings.gate_min_sample = model.gate_min_sample
+    settings.gate_max_disagreement_pp = model.gate_max_disagreement_pp
+    settings.gate_max_edge_pp_uncalibrated = model.gate_max_edge_pp_uncalibrated
+    settings.high_probability_min = model.high_probability_min
+    if model.opportunity_weights:
+        settings.opportunity_weights = dict(model.opportunity_weights)
+    else:
+        settings.opportunity_weights = dict(Settings.model_fields["opportunity_weights"].default_factory())  # type: ignore[misc]
 
 
 @router.get("/settings", response_model=SettingsModel)
@@ -341,6 +371,7 @@ def get_settings(session: Session = Depends(get_session)):
 
 @router.put("/settings", response_model=SettingsModel)
 def put_settings(model: SettingsModel, session: Session = Depends(get_session)):
+    model = enforce_floors(model)
     model.kelly_fraction_max = min(model.kelly_fraction_max, 0.25)
     if model.default_simulations not in (10_000, 25_000, 50_000, 100_000):
         model.default_simulations = 50_000

@@ -80,8 +80,8 @@ def test_engine_uses_calibrated_probability_only_when_reliable():
     )
     # calibrador que "encolhe" tudo para 0.5·p + 0.25 (superconfiança corrigida)
     shrink = Calibrator("1X2|GLOBAL", 500, True, [0.0, 1.0], [0.25, 0.75], None, None)
-    raw_recs, _ = evaluate(**common)
-    cal_recs, _ = evaluate(**common, calibrators={"1X2|GLOBAL": shrink}, competition="Qualquer")
+    raw_recs, _, _ = evaluate(**common)
+    cal_recs, _, _ = evaluate(**common, calibrators={"1X2|GLOBAL": shrink}, competition="Qualquer")
     raw_home = next(r for r in raw_recs if r.selection_key == "HOME")
     cal_home = next(r for r in cal_recs if r.selection_key == "HOME")
     assert raw_home.model_prob_raw == raw_home.model_prob and raw_home.model_prob_calibrated is None and not raw_home.calibration_reliable
@@ -93,6 +93,6 @@ def test_engine_uses_calibrated_probability_only_when_reliable():
     assert abs(cal_home.edge_pp - (cal_home.model_prob - cal_home.market_prob) * 100) < 0.02
     # calibrador NÃO confiável → probabilidade crua, mesmo que exista
     weak = Calibrator("1X2|GLOBAL", 20, False, [0.0, 1.0], [0.25, 0.75], None, None)
-    weak_recs, _ = evaluate(**common, calibrators={"1X2|GLOBAL": weak})
+    weak_recs, _, _ = evaluate(**common, calibrators={"1X2|GLOBAL": weak})
     weak_home = next(r for r in weak_recs if r.selection_key == "HOME")
     assert weak_home.model_prob == raw_home.model_prob and weak_home.model_prob_calibrated is None

@@ -18,7 +18,7 @@ from ..collectors import SuperbetSync, latest_odds_rows, odds_history_map
 from ..collectors.sync import IdentityAssigner
 from ..core import versions
 from ..core.config import settings
-from ..db.models import Competition, Event, Favorite, PredictionSnapshot
+from ..db.models import Competition, Event, Favorite, PredictionSnapshot, Setting
 from ..domain.analysis import (
     CountDistribution,
     EventSummary,
@@ -96,6 +96,71 @@ def calibrators(session: Session) -> dict[str, Calibrator]:
     return _calibrators
 
 
+_ctx_cache: dict[str, tuple[datetime, object]] = {}
+CTX_TTL = timedelta(seconds=60)
+
+
+def _ctx(key: str, loader):
+    """Contexto compartilhado por várias análises no mesmo ciclo (saúde do provider, performance)."""
+    item = _ctx_cache.get(key)
+    if item and datetime.utcnow() - item[0] < CTX_TTL:
+        return item[1]
+    value = loader()
+    _ctx_cache[key] = (datetime.utcnow(), value)
+    return value
+
+
+def provider_status(session: Session) -> str | None:
+    def load():
+        try:
+            from ..quality.health import superbet_health
+
+            return superbet_health(session).status
+        except Exception as exc:  # noqa: BLE001
+            log.warning("saúde do provider indisponível: %s", exc)
+            return None
+
+    return _ctx("provider_status", load)  # type: ignore[return-value]
+
+
+def historical_by_market(session: Session) -> dict[str, dict]:
+    """ROI e N por mercado a partir do resumo de performance persistido (apostas settled reais)."""
+
+    def load():
+        row = session.get(Setting, "performance_summary")
+        data = (row.value or {}) if row else {}
+        out: dict[str, dict] = {}
+        for mk, m in (data.get("by_market") or {}).items():
+            out[mk] = {"roi": m.get("roi"), "n": int(m.get("bets") or 0), "status": m.get("sample_status")}
+        return out
+
+    return _ctx("historical_by_market", load)  # type: ignore[return-value]
+
+
+def datasets_with_odds(store) -> set[str]:
+    return _ctx("datasets_with_odds", lambda: store.datasets_with_odds())  # type: ignore[return-value]
+
+
+def settled_by_competition(session: Session) -> dict[str, int]:
+    def load():
+        row = session.get(Setting, "performance_summary")
+        data = (row.value or {}) if row else {}
+        return {name: int(m.get("bets") or 0) for name, m in (data.get("by_competition") or {}).items()}
+
+    return _ctx("settled_by_competition", load)  # type: ignore[return-value]
+
+
+def evidence_level(session: Session, store, codes: list[str], competition_name: str | None) -> str:
+    """SETTLED (N>=30 apostas liquidadas na competição) → BACKTEST_ODDS (dataset com odds) → MODEL_ONLY."""
+    from ..backtesting.performance import MIN_SAMPLE_FOR_METRICS
+
+    if competition_name and settled_by_competition(session).get(competition_name, 0) >= MIN_SAMPLE_FOR_METRICS:
+        return "SETTLED"
+    if codes and all(c in datasets_with_odds(store) for c in codes):
+        return "BACKTEST_ODDS"
+    return "MODEL_ONLY"
+
+
 def invalidate_cache() -> None:
     global _calibrators
     with _cache_lock:
@@ -104,6 +169,7 @@ def invalidate_cache() -> None:
     dc_cache.clear()
     bp_cache.clear()
     _calibrators = None
+    _ctx_cache.clear()
 
 
 def event_summary(row: Event, session: Session | None = None, main_odds: dict[str, float] | None = None) -> EventSummary:
@@ -331,17 +397,30 @@ def analyze_event(
         dc_available=dc.available,
     )
     calibration, cal_n = market_calibration(session)
+    n_models = sum(1 for m in (poisson, dc, bp) if m is not None and m.available)
     conf = compute_confidence(
         data_quality=dq, home=home, away=away, venue=venue, model_disagreement_pp=disagreement,
         market_calibration=calibration.get("1X2") if calibration else None, calibration_samples=cal_n,
+        freshness=freshness, n_models=n_models,
     )
 
     unreliable = any(a.status in ("unavailable", "error") and a.provider != "superbet" for a in attempts)
-    recs, verdict = evaluate(
+    evidence = evidence_level(session, store, list(codes), row.competition_name)
+    if consensus is not None:
+        model_source = f"consenso de {n_models} modelos de gols (pesos {comparison.weights_source}) + Monte Carlo"
+    elif dc.available:
+        model_source = "Dixon-Coles + Monte Carlo"
+    else:
+        model_source = "Poisson por força + Monte Carlo"
+    recs, verdict, event_why_not = evaluate(
         markets=markets, sim=sim, corners=corners, cards=cards, confidence=conf, data_quality=dq,
         supported=profile.supported, teams_resolved=resolved.ok, min_sample=min(home.sample_size, away.sample_size),
         model_disagreement_pp=disagreement, unreliable_source=unreliable, market_calibration=calibration,
         stale_data=stale_reason, calibrators=calibrators(session), competition=row.competition_name,
+        odds_freshness=odds_f.status if odds_f is not None else None,
+        odds_age_seconds=odds_f.age_seconds if odds_f is not None else None,
+        provider_status=provider_status(session), n_models=n_models, model_source=model_source,
+        historical=historical_by_market(session), evidence=evidence,
     )
     if not profile.supported and profile.reason:
         warnings.append(profile.reason)
@@ -401,6 +480,9 @@ def analyze_event(
         conflicts=conflicts,
         conflicts_count=len(conflicts),
         canonical_event_id=row.canonical_event_id,
+        why_not=event_why_not,
+        quality_gate_passed=any(r.status == "RECOMMENDED" and r.quality_gate is not None and r.quality_gate.passed for r in recs),
+        evidence=evidence,  # type: ignore[arg-type]
     )
     analysis.explanation = explain(analysis)
     for r in analysis.recommendations:

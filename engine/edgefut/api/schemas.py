@@ -61,6 +61,11 @@ class RadarItem(BaseModel):
     confidence_grade: str
     data_quality: float
     no_bet_reason: NoBetReason | None = None
+    label: str | None = None  # HIGH_PROBABILITY | VALUE | HIGH_PROBABILITY_VALUE
+    quality_gate_passed: bool = False
+    freshness_status: str | None = None
+    evidence: str | None = None  # SETTLED | BACKTEST_ODDS | MODEL_ONLY
+    why: list[str] = Field(default_factory=list)  # 2 primeiras razões (WHY / WHY NOT)
 
 
 class RadarCard(BaseModel):
@@ -70,11 +75,33 @@ class RadarCard(BaseModel):
     items: list[RadarItem]
 
 
+class RadarSummary(BaseModel):
+    """Contadores do cabeçalho do Radar V2 — sempre sobre a janela pedida."""
+
+    last_update: datetime | None
+    events_found: int  # eventos futuros na janela (Superbet), sem duplicatas
+    with_sufficient_data: int  # analisados sem NO BET por dados (UNSUPPORTED/LOW_DATA/SMALL_SAMPLE/UNRELIABLE)
+    analyzed: int
+    quality_gate_passed: int
+    confidence_a: int
+    confidence_b: int
+    high_probability: int
+    value: int
+    watch: int
+    no_bet: int
+    stale: int  # análises com freshness STALE/EXPIRED
+    alerts_unread: int = 0
+    no_bet_by_reason: dict[str, int] = Field(default_factory=dict)
+    gate_passed_by_evidence: dict[str, int] = Field(default_factory=dict)  # SETTLED / BACKTEST_ODDS / MODEL_ONLY
+
+
 class RadarResponse(BaseModel):
     generated_at: datetime
     analyzed_events: int
     refreshing: bool
     cards: list[RadarCard]
+    summary: RadarSummary | None = None
+    thresholds: dict[str, float] = Field(default_factory=dict)  # limiares em vigor (transparência)
 
 
 class EntryRow(BaseModel):
@@ -98,6 +125,15 @@ class DashboardResponse(BaseModel):
     top_opportunities: list[EntryRow]
     popular_events: list[EventSummary]
     scheduler: dict
+    # Iteração 2 — workflow da manhã
+    morning_summary: str = ""
+    cta: str = "VER RADAR"
+    events_found: int = 0
+    quality_gate_passed: int = 0
+    watch: int = 0
+    no_bet: int = 0
+    alerts_unread: int = 0
+    health_overall: str | None = None
 
 
 class SimulatorRequest(BaseModel):
@@ -197,6 +233,14 @@ class SettingsModel(BaseModel):
     odds_refresh_min: int = 5
     margin_method: Literal["MULTIPLICATIVE", "SHIN"] = "MULTIPLICATIVE"
     live_poll_seconds: int = 30
+    # Quality Gate / rótulos / Opportunity V2 (pisos em core.config.HARD_FLOORS)
+    gate_min_data_quality: float = 60.0
+    gate_min_confidence: float = 65.0
+    gate_min_sample: int = 15
+    gate_max_disagreement_pp: float = 10.0
+    gate_max_edge_pp_uncalibrated: float = 15.0
+    high_probability_min: float = 0.65
+    opportunity_weights: dict[str, float] = Field(default_factory=dict)  # vazio = padrão do engine
 
 
 class BootstrapStatus(BaseModel):

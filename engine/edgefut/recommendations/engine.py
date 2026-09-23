@@ -13,25 +13,30 @@ from ..domain.analysis import (
     Recommendation,
     SimulationOutput,
 )
+from ..domain.freshness import FreshnessStatus
 from ..models.calibration import pick
 from .confidence import grade_for
 from .edge import CATEGORY_BY_MARKET, WATCH_ONLY_MARKETS, edge_and_ev, model_probability
+from .gate import GateContext, quality_gate
+from .opportunity import OpportunityInputs, compute_opportunity
+from .why import WhyContext, event_why_not, why_bet, why_not
 
 EXTREME_MOVEMENT_PCT = 15.0
 MODEL_DISAGREEMENT_PP = 10.0
 SMALL_SAMPLE_N = 10
 
 
-def opportunity_score(
-    *, data_quality: float, confidence: float, edge_pp: float, movement_pct: float | None, calibration: float | None
-) -> float:
-    edge_norm = max(0.0, min(1.0, edge_pp / 10))
-    stability = 1 - max(0.0, min(1.0, abs(movement_pct or 0.0) / EXTREME_MOVEMENT_PCT))
-    cal = 0.5 if calibration is None else max(0.0, min(1.0, calibration))
-    score = 100 * (
-        0.30 * data_quality / 100 + 0.30 * confidence / 100 + 0.25 * edge_norm + 0.10 * stability + 0.05 * cal
-    )
-    return round(score, 1)
+def opportunity_label(model_prob: float, edge_pp: float, ev_pct: float) -> str | None:
+    """SAFE ≠ VALUE. HIGH_PROBABILITY fala da probabilidade; VALUE fala do edge. Podem coexistir."""
+    high = model_prob >= settings.high_probability_min
+    value = edge_pp >= settings.min_edge_pp and ev_pct >= settings.min_ev_pct
+    if high and value:
+        return "HIGH_PROBABILITY_VALUE"
+    if high:
+        return "HIGH_PROBABILITY"
+    if value:
+        return "VALUE"
+    return None
 
 
 def _event_no_bet(
@@ -55,8 +60,8 @@ def _event_no_bet(
         return NoBetVerdict(no_bet=True, reason="UNRELIABLE_SOURCE", detail="Fonte histórica indisponível ou bloqueada na coleta.")
     if min_sample < SMALL_SAMPLE_N:
         return NoBetVerdict(no_bet=True, reason="SMALL_SAMPLE", detail=f"Menor amostra com apenas {min_sample} jogos (mín. {SMALL_SAMPLE_N}).")
-    if model_disagreement_pp is not None and model_disagreement_pp > MODEL_DISAGREEMENT_PP:
-        return NoBetVerdict(no_bet=True, reason="MODEL_DISAGREEMENT", detail=f"Modelos de gols divergem {model_disagreement_pp:.1f} pp no 1X2 (limite {MODEL_DISAGREEMENT_PP:.0f} pp).")
+    if model_disagreement_pp is not None and model_disagreement_pp > settings.gate_max_disagreement_pp:
+        return NoBetVerdict(no_bet=True, reason="MODEL_DISAGREEMENT", detail=f"Modelos de gols divergem {model_disagreement_pp:.1f} pp no 1X2 (limite {settings.gate_max_disagreement_pp:.0f} pp).")
     if confidence.grade == "D":
         return NoBetVerdict(no_bet=True, reason="LOW_CONFIDENCE", detail=f"Confiança {confidence.score:.0f}/100 (grade D).")
     return None
@@ -79,13 +84,27 @@ def evaluate(
     stale_data: str | None = None,
     calibrators: dict | None = None,
     competition: str | None = None,
-) -> tuple[list[Recommendation], NoBetVerdict]:
+    odds_freshness: FreshnessStatus | None = None,
+    odds_age_seconds: int | None = None,
+    provider_status: str | None = None,
+    n_models: int = 1,
+    model_source: str = "modelo de gols",
+    historical: dict[str, dict] | None = None,  # market_key → {"roi": %, "n": int}
+    evidence: str = "MODEL_ONLY",
+) -> tuple[list[Recommendation], NoBetVerdict, list[str]]:
+    """Retorna (recomendações, veredito do evento, WHY NOT do evento)."""
     event_block = _event_no_bet(
         supported=supported, teams_resolved=teams_resolved, min_sample=min_sample, sim=sim,
         model_disagreement_pp=model_disagreement_pp, confidence=confidence, unreliable_source=unreliable_source,
         stale_data=stale_data,
     )
     market_calibration = market_calibration or {}
+    historical = historical or {}
+    why_ctx = WhyContext(
+        model_source=model_source, odds_freshness=odds_freshness, odds_age_seconds=odds_age_seconds,
+        model_disagreement_pp=model_disagreement_pp, n_models=n_models, min_sample=min_sample,
+        data_quality=data_quality.score, provider_status=provider_status, evidence=evidence,
+    )
     recs: list[Recommendation] = []
     player_markets = [m for m in markets if m.market_key == "PLAYER_TO_SCORE"]
     if player_markets:
@@ -133,12 +152,19 @@ def evaluate(
                 reasons.append("mercado de alta variância / aproximação")
             grade = grade_for(conf_score)
             cal_quality = market_calibration.get(market.market_key)
-            opp = opportunity_score(
-                data_quality=data_quality.score, confidence=conf_score, edge_pp=edge_pp,
-                movement_pct=sel.movement_pct, calibration=cal_quality,
+            hist = historical.get(market.market_key) or {}
+            opp = compute_opportunity(
+                OpportunityInputs(
+                    confidence_score=conf_score, data_quality=data_quality.score, edge_pp=edge_pp, ev_pct=ev_pct,
+                    odds_freshness=odds_freshness, odds_age_seconds=odds_age_seconds,
+                    model_disagreement_pp=model_disagreement_pp, n_models=n_models, sample_size=min_sample,
+                    calibration_quality=cal_quality, calibration_reliable=cal is not None,
+                    historical_roi=hist.get("roi"), historical_n=int(hist.get("n") or 0),
+                )
             )
 
             status = "RECOMMENDED"
+            gate = None
             if event_block is not None:
                 status, reasons = "NO_BET", [event_block.reason or "NO_BET", *reasons]
             elif sel.movement_pct is not None and abs(sel.movement_pct) > EXTREME_MOVEMENT_PCT:
@@ -152,27 +178,50 @@ def evaluate(
             elif market.market_key in WATCH_ONLY_MARKETS or grade == "C":
                 status = "WATCH"
 
-            recs.append(
-                Recommendation(
-                    market_key=market.market_key, market_label=market.label, selection_key=sel.key,
-                    selection_name=sel.name, line=market.line, odd=sel.price, model_prob=round(mp, 4),
-                    model_prob_raw=round(raw_p, 4), model_prob_calibrated=cal_p,
-                    calibration_group=cal.group_key if cal is not None else None, calibration_reliable=cal is not None,
-                    market_prob=round(market_prob, 4), market_prob_is_fair=sel.fair is not None,
-                    edge_pp=edge_pp, ev_pct=ev_pct, confidence_score=round(conf_score, 1), confidence_grade=grade,
-                    opportunity_score=opp, status=status, reasons=reasons, category=category,  # type: ignore[arg-type]
+            if status == "RECOMMENDED":
+                gate = quality_gate(
+                    GateContext(
+                        data_quality=data_quality.score, confidence_score=conf_score, min_sample=min_sample,
+                        model_disagreement_pp=model_disagreement_pp, n_models=n_models, odds_freshness=odds_freshness,
+                        provider_status=provider_status, edge_pp=edge_pp, ev_pct=ev_pct, odd=sel.price,
+                        calibration_reliable=cal is not None,
+                    )
                 )
+                if not gate.passed:
+                    status, reasons = "WATCH", ["QUALITY_GATE", *reasons]
+
+            rec = Recommendation(
+                market_key=market.market_key, market_label=market.label, selection_key=sel.key,
+                selection_name=sel.name, line=market.line, odd=sel.price, model_prob=round(mp, 4),
+                model_prob_raw=round(raw_p, 4), model_prob_calibrated=cal_p,
+                calibration_group=cal.group_key if cal is not None else None, calibration_reliable=cal is not None,
+                market_prob=round(market_prob, 4), market_prob_is_fair=sel.fair is not None,
+                edge_pp=edge_pp, ev_pct=ev_pct, confidence_score=round(conf_score, 1), confidence_grade=grade,
+                opportunity_score=opp.score, status=status, reasons=reasons, category=category,  # type: ignore[arg-type]
+                label=opportunity_label(mp, edge_pp, ev_pct), opportunity=opp, quality_gate=gate,  # type: ignore[arg-type]
+                evidence=evidence,  # type: ignore[arg-type]
             )
+            rec.why = why_bet(rec, why_ctx) if status in ("RECOMMENDED", "WATCH") else []
+            rec.why_not = why_not(rec, why_ctx, gate) if status != "RECOMMENDED" else []
+            recs.append(rec)
 
     recs.sort(key=lambda r: (-(r.status == "RECOMMENDED"), -(r.status == "WATCH"), -r.opportunity_score))
 
     if event_block is not None:
-        return recs, event_block
+        return recs, event_block, event_why_not(event_block, why_ctx)
     if any(r.status == "RECOMMENDED" for r in recs):
-        return recs, NoBetVerdict(no_bet=False)
+        return recs, NoBetVerdict(no_bet=False), []
     if any(r.status == "WATCH" for r in recs):
-        return recs, NoBetVerdict(no_bet=True, reason="NO_EDGE", detail="Apenas seleções em observação; nenhuma atende aos limiares de edge, EV, odd e confiança.")
-    return recs, NoBetVerdict(no_bet=True, reason="NO_EDGE", detail="Mercado bem precificado: nenhuma seleção com edge suficiente.")
+        gated = [r for r in recs if r.status == "WATCH" and "QUALITY_GATE" in r.reasons]
+        if gated:
+            failed = sorted({k for r in gated for k in (r.quality_gate.failed if r.quality_gate else [])})
+            v = NoBetVerdict(no_bet=True, reason="QUALITY_GATE", detail=f"{len(gated)} seleção(ões) com edge, mas reprovadas no quality gate: {', '.join(failed)}.")
+        else:
+            v = NoBetVerdict(no_bet=True, reason="NO_EDGE", detail="Apenas seleções em observação; nenhuma atende aos limiares de edge, EV, odd e confiança.")
+        return recs, v, event_why_not(v, why_ctx)
+    v = NoBetVerdict(no_bet=True, reason="NO_EDGE", detail="Mercado bem precificado: nenhuma seleção com edge suficiente.")
+    return recs, v, event_why_not(v, why_ctx)
 
 
-__all__ = ["evaluate", "opportunity_score", "versions"]
+__all__ = ["evaluate", "opportunity_label", "versions"]
+

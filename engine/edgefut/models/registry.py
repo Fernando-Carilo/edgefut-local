@@ -28,7 +28,7 @@ SPECS: dict[str, dict] = {
     "corners": {"features": ["escanteios por janela", "ELO diff"], "parameters": {"distribution": "negative binomial", "lines": [6.5, 7.5, 8.5, 9.5, 10.5]}},
     "cards": {"features": ["cartões por janela"], "parameters": {"distribution": "negative binomial", "lines": [2.5, 3.5, 4.5, 5.5]}},
     "shots": {"features": ["finalizações", "no alvo", "conversão"], "parameters": {}},
-    "confidence": {"features": ["qualidade", "amostra", "recência", "consistência", "calibração", "divergência", "mando", "escalações"], "parameters": {"grades": {"A": 80, "B": 65, "C": 50}}},
+    "confidence": {"features": ["qualidade", "amostra", "recência", "consistência", "calibração", "divergência", "frescor", "mando", "escalações"], "parameters": {"grades": {"A": 80, "B": 65, "C": 50}, "groups": ["DATA_QUALITY", "MODEL_AGREEMENT", "CALIBRATION", "HISTORICAL_SAMPLE", "FRESHNESS", "CONTEXT"]}},
     "opportunity": {"features": ["model confidence", "data quality", "calibration quality", "edge", "EV", "odds freshness", "model agreement", "historical performance", "sample size"], "parameters": {"scale": "0-100", "configurable": True}},
     "pipeline": {"features": ["coleta → … → explicação"], "parameters": {"min_edge_pp": settings.min_edge_pp, "min_ev_pct": settings.min_ev_pct, "odd_range": [settings.min_odd, settings.max_odd]}},
 }

@@ -50,12 +50,20 @@ class HistoricalStore:
                    ANY_VALUE(source_url) AS source_url,
                    SUM(CASE WHEN hc IS NOT NULL THEN 1 ELSE 0 END) AS rows_with_corners,
                    SUM(CASE WHEN hs IS NOT NULL THEN 1 ELSE 0 END) AS rows_with_shots,
-                   SUM(CASE WHEN hy IS NOT NULL THEN 1 ELSE 0 END) AS rows_with_cards
+                   SUM(CASE WHEN hy IS NOT NULL THEN 1 ELSE 0 END) AS rows_with_cards,
+                   SUM(CASE WHEN odds_h IS NOT NULL THEN 1 ELSE 0 END) AS rows_with_odds
             FROM {{matches}}
             GROUP BY dataset_code
             ORDER BY dataset_code
             """
         )
+
+    def datasets_with_odds(self, min_rows: int = 200) -> set[str]:
+        """Datasets com odds históricas reais (permitem backtest modelo × mercado). INTL não tem."""
+        df = self.datasets()
+        if df.empty or "rows_with_odds" not in df:
+            return set()
+        return {str(c) for c, n in zip(df["dataset_code"], df["rows_with_odds"]) if int(n or 0) >= min_rows}
 
     def team_names(self, dataset_codes: list[str]) -> list[str]:
         if not dataset_codes:
