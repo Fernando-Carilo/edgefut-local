@@ -276,10 +276,14 @@ def evaluate(
                 state = "MODEL_ONLY"
                 if status == "RECOMMENDED":
                     status, reasons = "WATCH", ["MODEL_ONLY", *reasons]
-            elif evidence == "MODEL_ONLY" and status in ("RECOMMENDED", "WATCH") and "NO_EDGE" not in reasons:
-                # há preço, mas a competição nunca foi validada contra odds → não se fala em valor
+            elif evidence == "MODEL_ONLY" and event_block is None:
+                # há preço, mas a competição nunca foi validada contra odds (seleções/FIFA, ligas sem odds
+                # históricas) → §29: tudo MODEL_ONLY; não se fala em valor, edge é hipótese, nunca ROI.
                 state = "MODEL_ONLY"
-                status, reasons = "WATCH", ["MODEL_ONLY", *[r for r in reasons if r != "QUALITY_GATE"]]
+                if status in ("RECOMMENDED", "WATCH"):
+                    status, reasons = "WATCH", ["MODEL_ONLY", *[r for r in reasons if r != "QUALITY_GATE"]]
+                elif "MODEL_ONLY" not in reasons:
+                    reasons = ["MODEL_ONLY", *reasons]
             elif status == "RECOMMENDED":
                 verdict, oos_row = oos_check(market.market_key, oos)
                 if verdict == "PASS":
@@ -292,7 +296,7 @@ def evaluate(
                 state = "OBSERVATION"
             elif "NO_EDGE" in reasons and event_block is None:
                 state = "MARKET_OBSERVED"
-                if is_watching_price(mp, sel.price, price.get("price_gap_pct")):
+                if is_watching_price(mp, sel.price, price.get("price_gap_pct"), min_acceptable_odd=price.get("min_acceptable_odd")):
                     state, status, reasons = "OBSERVATION", "WATCH", ["WATCHING_PRICE", *[r for r in reasons if r != "NO_EDGE"]]
             else:
                 state = "NO_BET"

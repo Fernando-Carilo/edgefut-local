@@ -47,9 +47,13 @@ def price_target(model_prob: float, odd: float | None, overround_sum: float | No
     return out
 
 
-def is_watching_price(model_prob: float, odd: float | None, price_gap_pct: float | None, *, max_gap_pct: float = 12.0) -> bool:
-    """Seleção "quase": probabilidade relevante e preço até `max_gap_pct` abaixo do mínimo aceitável."""
+def is_watching_price(model_prob: float, odd: float | None, price_gap_pct: float | None, *, max_gap_pct: float = 12.0, min_acceptable_odd: float | None = None) -> bool:
+    """Seleção "quase": probabilidade relevante e preço até `max_gap_pct` abaixo do mínimo aceitável.
+    Só faz sentido se a odd-alvo cair dentro da faixa configurada — uma odd 1,05 que precisaria
+    chegar a 1,10 nunca seria recomendada, logo não é "quase"."""
     if odd is None or price_gap_pct is None:
+        return False
+    if min_acceptable_odd is not None and not (settings.min_odd <= min_acceptable_odd <= settings.max_odd):
         return False
     return model_prob >= 0.30 and -max_gap_pct <= price_gap_pct < 0
 

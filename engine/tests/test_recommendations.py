@@ -269,6 +269,9 @@ def test_states_value_requires_oos_and_model_only_never_value():
     assert home.state_text == "Probabilidade calculada, mas sem preço de mercado válido para determinar valor."
     assert verdict.no_bet and verdict.reason == "MODEL_ONLY"
     assert all(r.state != "VALUE" and r.label != "VALUE" for r in recs)
+    # §29: em competição MODEL_ONLY, TODAS as seleções com preço são MODEL_ONLY — inclusive as sem edge
+    assert all(r.state == "MODEL_ONLY" for r in recs if r.market_key != "PLAYER_TO_SCORE")
+    assert not any("WATCHING_PRICE" in r.reasons for r in recs)
     # sem edge: mercado observado; favorito do modelo vira rótulo de probabilidade, não de valor
     recs, _, _ = _evaluate(markets=[_market_1x2(1.55)])
     home = next(r for r in recs if r.selection_key == "HOME")
