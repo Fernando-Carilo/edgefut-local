@@ -85,7 +85,7 @@ def compute_confidence(
     if model_disagreement_pp is None:
         dis_val, dis_note = 0.5, "apenas um modelo de gols disponível"
     else:
-        dis_val, dis_note = _clamp(1 - model_disagreement_pp / 10), f"divergência Poisson × Dixon-Coles: {model_disagreement_pp:.1f} pp"
+        dis_val, dis_note = _clamp(1 - model_disagreement_pp / 10), f"maior divergência entre modelos de gols: {model_disagreement_pp:.1f} pp"
     comps.append(ConfidenceComponent(name="Divergência entre modelos", weight=15, value=dis_val, note=dis_note))
 
     venue_val = 1.0 if venue.status != "UNCONFIRMED" else 0.5

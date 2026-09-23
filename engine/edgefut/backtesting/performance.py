@@ -81,7 +81,48 @@ def settle_pending(session: Session, max_events: int = 40) -> dict:
             s.settled_at = datetime.utcnow()
         settled += 1
         session.commit()
-    return {"checked": len(pending), "settled": settled, "score_conflicts": conflicts}
+    corrected = _apply_corrections(session, store)
+    return {"checked": len(pending), "settled": settled, "score_conflicts": conflicts, "corrections": corrected}
+
+
+def _apply_corrections(session: Session, store, days: int = 7, limit: int = 20) -> int:
+    """Eventos liquidados pelo feed cujo dataset curado (chegou depois) discorda do placar:
+    gera `snapshot_correction` e re-liquida. A previsão nunca é alterada."""
+    from ..db.immutability import correct_result
+    from ..quality import record_conflict
+
+    since = datetime.utcnow() - timedelta(days=days)
+    rows = session.execute(
+        select(Event).where(Event.settled_at >= since, Event.result_source == "superbet", Event.duplicate_of.is_(None))
+        .order_by(Event.settled_at.desc()).limit(limit)
+    ).scalars().all()
+    n = 0
+    for ev in rows:
+        history = _result_from_history(store, ev, session)
+        if history is None:
+            continue
+        if (history.hg, history.ag) == (ev.home_score, ev.away_score):
+            ev.result_source = history.source  # confirmado por fonte curada
+            session.commit()
+            continue
+        record_conflict(
+            session, event_id=ev.id, field="score", source_a="superbet", value_a=f"{ev.home_score}-{ev.away_score}",
+            source_b=history.source, value_b=f"{history.hg}-{history.ag}", selected_value=f"{history.hg}-{history.ag}",
+            selected_source=history.source, method="prefer_curated_history", confidence=0.8, canonical_event_id=ev.canonical_event_id,
+        )
+        snaps = session.execute(select(PredictionSnapshot).where(PredictionSnapshot.event_id == ev.id, PredictionSnapshot.result.is_not(None))).scalars().all()
+        for s in snaps:
+            outcomes = {}
+            for r in s.recommendations or []:
+                won = settle_selection(r["market_key"], r["selection_key"], r.get("line"), history)
+                if won is not None:
+                    outcomes[f"{r['market_key']}|{r['selection_key']}|{r.get('line')}"] = won
+            new_result = {"hg": history.hg, "ag": history.ag, "corners": history.corners, "cards": (s.result or {}).get("cards"), "source": history.source, "outcomes": outcomes}
+            correct_result(session, s, new_result, reason="placar revisado pelo dataset curado", source=history.source)
+        ev.home_score, ev.away_score, ev.result_source = history.hg, history.ag, history.source
+        n += 1
+        session.commit()
+    return n
 
 
 def _result_from_event(ev: Event) -> MatchResult | None:

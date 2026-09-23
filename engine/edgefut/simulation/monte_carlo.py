@@ -15,12 +15,13 @@ from ..models.goals_common import MAX_GOALS, score_matrix
 ALLOWED_SIMULATIONS = (10_000, 25_000, 50_000, 100_000)
 
 
-def simulate(model: GoalsModelOutput, n: int, seed: int) -> SimulationOutput | None:
+def simulate(model: GoalsModelOutput, n: int, seed: int, matrix: np.ndarray | None = None) -> SimulationOutput | None:
+    """`matrix` (opcional): matriz de placares já combinada (consenso); senão deriva de λ/ρ."""
     if not model.available or model.lambda_home is None or model.lambda_away is None:
         return None
     if n not in ALLOWED_SIMULATIONS:
         n = 50_000
-    m = score_matrix(model.lambda_home, model.lambda_away, model.rho)
+    m = matrix if matrix is not None else score_matrix(model.lambda_home, model.lambda_away, model.rho)
     rng = np.random.default_rng(seed)
     flat = m.ravel()
     draws = rng.choice(flat.size, size=n, p=flat / flat.sum())

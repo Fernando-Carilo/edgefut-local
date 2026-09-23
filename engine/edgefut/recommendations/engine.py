@@ -56,7 +56,7 @@ def _event_no_bet(
     if min_sample < SMALL_SAMPLE_N:
         return NoBetVerdict(no_bet=True, reason="SMALL_SAMPLE", detail=f"Menor amostra com apenas {min_sample} jogos (mín. {SMALL_SAMPLE_N}).")
     if model_disagreement_pp is not None and model_disagreement_pp > MODEL_DISAGREEMENT_PP:
-        return NoBetVerdict(no_bet=True, reason="MODEL_DISAGREEMENT", detail=f"Poisson e Dixon-Coles divergem {model_disagreement_pp:.1f} pp no 1X2.")
+        return NoBetVerdict(no_bet=True, reason="MODEL_DISAGREEMENT", detail=f"Modelos de gols divergem {model_disagreement_pp:.1f} pp no 1X2 (limite {MODEL_DISAGREEMENT_PP:.0f} pp).")
     if confidence.grade == "D":
         return NoBetVerdict(no_bet=True, reason="LOW_CONFIDENCE", detail=f"Confiança {confidence.score:.0f}/100 (grade D).")
     return None

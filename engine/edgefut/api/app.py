@@ -14,6 +14,7 @@ from ..core import versions
 from ..core.config import settings
 from ..core.logging import setup_logging
 from ..core.paths import get_paths
+from ..db.immutability import install_snapshot_guard
 from ..db.migrations import run_migrations
 from ..db.session import get_engine
 from ..providers import CircuitOpen, SourceBlocked, SourceError
@@ -38,12 +39,15 @@ async def lifespan(app: FastAPI):
     setup_logging()
     get_paths().ensure()
     run_migrations(get_engine())
+    install_snapshot_guard()
     install_source_log_sink()
     from .routers.system import apply_settings, load_settings
     from ..db.session import session_scope
+    from ..models.registry import sync_registry
 
     with session_scope() as s:
         apply_settings(load_settings(s))
+        sync_registry(s)
     if settings.autostart_bootstrap:
         bootstrap.run_in_background(minimal=False)
     log.info("EdgeFut engine %s em http://%s:%s", versions.APP_VERSION, settings.host, settings.port)

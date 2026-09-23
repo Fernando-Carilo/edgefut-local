@@ -31,12 +31,15 @@ MODEL_DESCRIPTIONS = {
     "elo": "ELO com atualização temporal, multiplicador por margem de gols e vantagem de mando ponderada pelo tipo de local.",
     "poisson": "Poisson independente: λ = média da liga × ataque × defesa × vantagem de mando.",
     "dixon_coles": "Dixon-Coles com decaimento temporal (ξ=0.0018/dia) e correção ρ para placares baixos; ajuste por L-BFGS-B.",
+    "bivariate_poisson": "Bivariate Poisson (Karlis & Ntzoufras): marginais por MLE ponderado + covariância λ3 por MLE unidimensional. Não substitui os demais; entra na comparação e no consenso.",
+    "ensemble": "Consenso: média ponderada das matrizes de placar dos modelos disponíveis. Pesos por log loss em walk-forward (por competição se N≥200, senão global); sem pesos → iguais.",
+    "calibration": "Calibração isotônica (PAV) por mercado × grupo, só usada com N≥300 previsões liquidadas. RAW e CALIBRATED sempre exibidas.",
     "monte_carlo": "Monte Carlo (10k/25k/50k/100k) sobre a matriz de placares do modelo de gols; seed = eventId (reprodutível).",
     "corners": "Binomial Negativa para escanteios (k por método dos momentos), linhas 6.5–10.5.",
     "cards": "Binomial Negativa para cartões, linhas 2.5–5.5; árbitro só quando público.",
     "shots": "Finalizações e finalizações no alvo esperadas por time (média ponderada, taxa de conversão).",
     "confidence": "Confidence Engine: qualidade de dados, amostra, concordância de modelos, estabilidade de odds, calibração → A/B/C/D.",
-    "opportunity": "Opportunity Score 0–100: 30% qualidade, 30% confiança, 25% edge, 10% estabilidade, 5% calibração. Nunca pela odd.",
+    "opportunity": "Opportunity Score V2 0–100: model confidence, data quality, calibration quality, edge, EV, odds freshness, model agreement, historical performance, sample size (pesos configuráveis). Nunca pela odd.",
     "pipeline": "Coleta → Normalização → Qualidade → Features → Modelos → Simulação → Probabilidade → Odd justa → Comparação → Edge → Risco → Recomendação/NO BET → Explicação.",
 }
 
@@ -98,7 +101,7 @@ def jobs_run(job: str):
         "events": jobs.job_sync_events, "odds": jobs.job_sync_odds, "history": jobs.job_sync_history, "settle": jobs.job_settle,
         "radar": jobs.job_refresh_radar, "closing_lines": jobs.job_closing_lines, "performance": jobs.job_update_performance,
         "calibration": jobs.job_update_calibration, "cache_cleanup": jobs.job_cache_cleanup, "alerts": jobs.job_alerts,
-        "live_poll": jobs.job_live_poll,
+        "live_poll": jobs.job_live_poll, "ensemble_weights": jobs.job_ensemble_weights,
     }.get(job)
     if fn is None:
         return JSONResponse(status_code=404, content={"detail": f"job desconhecido: {job}"})
@@ -268,16 +271,23 @@ def sources_refresh(what: str = Query("events", pattern="^(events|odds|history|s
 
 
 @router.get("/models")
-def models():
+def models(session: Session = Depends(get_session)):
+    from ...models.bivariate_poisson import bp_cache
     from ...models.dixon_coles import dc_cache
     from ...models.elo import elo_cache
+    from ...models.ensemble import WEIGHTS_KEY
+    from ...models.registry import registry_rows
 
+    weights_row = session.get(Setting, WEIGHTS_KEY)
     return {
         "versions": versions.ALL_MODELS,
         "app_version": versions.APP_VERSION,
         "models": [
             {"key": k, "version": v, "description": MODEL_DESCRIPTIONS.get(k, "")} for k, v in versions.ALL_MODELS.items()
         ],
+        "registry": registry_rows(session),
+        "ensemble_weights": weights_row.value if weights_row else {},
+        "margin_method": settings.margin_method,
         "parameters": {
             "default_simulations": settings.default_simulations,
             "min_edge_pp": settings.min_edge_pp,
@@ -290,6 +300,7 @@ def models():
         "fitted": {
             "elo": [str(k) for k in list(elo_cache._tables.keys())],
             "dixon_coles": [str(k) for k in list(dc_cache._fits.keys())],
+            "bivariate_poisson": [str(k) for k in list(bp_cache._fits.keys())],
         },
     }
 

@@ -337,6 +337,9 @@ class MatchAnalysis(BaseModel):
     elo: EloOutput
     poisson: GoalsModelOutput
     dixon_coles: GoalsModelOutput
+    bivariate_poisson: GoalsModelOutput | None = None
+    consensus: GoalsModelOutput | None = None  # ensemble-v1 (base da simulação)
+    model_comparison: dict | None = None  # ModelComparison serializado
     simulation: SimulationOutput | None
     corners: CountDistribution
     cards: CountDistribution

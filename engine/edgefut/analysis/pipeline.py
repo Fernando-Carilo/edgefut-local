@@ -43,7 +43,9 @@ from ..features.strength import (
 from ..features.venue import resolve_venue
 from ..models.counts import cards_engine, corners_engine, shots_engine
 from ..models.dixon_coles import dc_cache, dixon_coles_output, fit_dixon_coles
+from ..models.bivariate_poisson import bivariate_output, bp_cache, fit_bivariate_poisson
 from ..models.calibration import Calibrator, load_calibrators
+from ..models.ensemble import compare, load_weights
 from ..models.elo import elo_cache, elo_output, fit_elo
 from ..models.poisson import poisson_model
 from ..normalization import CompetitionProfile, classify_competition, is_womens
@@ -100,6 +102,7 @@ def invalidate_cache() -> None:
         _cache.clear()
     elo_cache.clear()
     dc_cache.clear()
+    bp_cache.clear()
     _calibrators = None
 
 
@@ -282,15 +285,19 @@ def analyze_event(
     dc_params = dc_cache.get(dc_key, lambda: fit_dixon_coles(comp_df)) if codes and not comp_df.empty else None
     dc = dixon_coles_output(dc_params, resolved.home.canonical, resolved.away.canonical, venue.home_advantage_weight)
 
-    disagreement = None
-    if poisson.available and dc.available:
-        disagreement = round(
-            100 * max(abs(poisson.p_home - dc.p_home), abs(poisson.p_draw - dc.p_draw), abs(poisson.p_away - dc.p_away)), 2  # type: ignore[operator]
-        )
+    bp_key = ("bp", tuple(codes), len(comp_df))
+    bp_params = bp_cache.get(bp_key, lambda: fit_bivariate_poisson(comp_df)) if codes and not comp_df.empty else None
+    bp = bivariate_output(bp_params, resolved.home.canonical, resolved.away.canonical, venue.home_advantage_weight)
 
-    base = dc if dc.available else poisson
+    # ---- comparação de modelos + consenso (ensemble-v1) ------------------------
+    comparison, consensus, cons_matrix = compare(
+        poisson=poisson, dixon_coles=dc, bivariate=bp, weights=load_weights(session, codes[0] if codes else None),
+    )
+    disagreement = comparison.max_disagreement_pp
+
+    base = consensus if consensus is not None else (dc if dc.available else poisson)
     n_sim = simulations or settings.default_simulations
-    sim = simulate(base, n_sim, seed=event_id) if base.available else None
+    sim = simulate(base, n_sim, seed=event_id, matrix=cons_matrix if consensus is not None else None) if base.available else None
 
     # ---- contagens ---------------------------------------------------------------
     count_prov = home.provenance
@@ -371,6 +378,9 @@ def analyze_event(
         elo=elo_out,
         poisson=poisson,
         dixon_coles=dc,
+        bivariate_poisson=bp,
+        consensus=consensus,
+        model_comparison=comparison.model_dump(mode="json"),
         simulation=sim,
         corners=corners,
         cards=cards,
@@ -501,6 +511,9 @@ def _save_snapshot(session: Session, row: Event, a: MatchAnalysis) -> int | None
             "simulation": a.simulation.model_dump(mode="json") if a.simulation else None,
             "poisson": a.poisson.model_dump(mode="json"),
             "dixon_coles": a.dixon_coles.model_dump(mode="json"),
+            "bivariate_poisson": a.bivariate_poisson.model_dump(mode="json") if a.bivariate_poisson else None,
+            "consensus": a.consensus.model_dump(mode="json") if a.consensus else None,
+            "model_comparison": a.model_comparison,
             "corners": a.corners.model_dump(mode="json"),
             "cards": a.cards.model_dump(mode="json"),
         },

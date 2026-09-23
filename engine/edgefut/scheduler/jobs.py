@@ -41,6 +41,7 @@ _state: dict = {
     "last_performance_update": None,
     "last_calibration_update": None,
     "last_cache_cleanup": None,
+    "last_ensemble_weights": None,
     "last_live_poll": None,
     "radar_running": False,
     "errors": [],
@@ -57,6 +58,7 @@ JOB_LABELS = {
     "closing_lines": "Closing lines",
     "performance": "Performance",
     "calibration": "Calibração",
+    "ensemble_weights": "Pesos do ensemble (walk-forward)",
     "cache_cleanup": "Limpeza de cache",
     "alerts": "Alertas locais",
     "live_poll": "Ao vivo (observação)",
@@ -277,6 +279,19 @@ def job_update_calibration() -> dict:
     return run_job("calibration", _update_calibration, state_key="last_calibration_update")
 
 
+def _ensemble_weights() -> dict:
+    from ..models.ensemble import refresh_ensemble_weights
+
+    with session_scope() as s:
+        res = refresh_ensemble_weights(s)
+    invalidate_cache()
+    return res
+
+
+def job_ensemble_weights() -> dict:
+    return run_job("ensemble_weights", _ensemble_weights, state_key="last_ensemble_weights")
+
+
 def _cache_cleanup() -> dict:
     from ..core.paths import get_paths
     from ..db.models import SourceLog
@@ -344,6 +359,7 @@ def start() -> BackgroundScheduler | None:
     sched.add_job(job_closing_lines, "interval", minutes=10, id="closing_lines", **common)
     sched.add_job(job_update_performance, "interval", hours=6, id="performance", **common)
     sched.add_job(job_update_calibration, "interval", hours=6, id="calibration", **common)
+    sched.add_job(job_ensemble_weights, "interval", hours=24, id="ensemble_weights", **common)
     sched.add_job(job_cache_cleanup, "interval", hours=24, id="cache_cleanup", **common)
     sched.add_job(job_live_poll, "interval", seconds=max(20, settings.live_poll_seconds), id="live_poll", **common)
     sched.start()

@@ -6,19 +6,25 @@ STRENGTH = "strength-v1"
 ELO = "elo-v1"
 POISSON = "goals-poisson-v1"
 DIXON_COLES = "goals-dixon-coles-v1"
+BIVARIATE_POISSON = "goals-bivariate-poisson-v1"
+ENSEMBLE = "ensemble-v1"
+CALIBRATION = "calibration-isotonic-v1"
 MONTE_CARLO = "mc-v1"
 CORNERS = "corners-v1"
 CARDS = "cards-v1"
 SHOTS = "shots-v1"
 CONFIDENCE = "confidence-v1"
-OPPORTUNITY = "opportunity-v1"
-PIPELINE = "pipeline-v1"
+OPPORTUNITY = "opportunity-v2"
+PIPELINE = "pipeline-v2"
 
 ALL_MODELS = {
     "strength": STRENGTH,
     "elo": ELO,
     "poisson": POISSON,
     "dixon_coles": DIXON_COLES,
+    "bivariate_poisson": BIVARIATE_POISSON,
+    "ensemble": ENSEMBLE,
+    "calibration": CALIBRATION,
     "monte_carlo": MONTE_CARLO,
     "corners": CORNERS,
     "cards": CARDS,
