@@ -11,7 +11,7 @@ import threading
 from datetime import datetime, timedelta
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..collectors import SuperbetSync, latest_odds_rows, odds_history_map
@@ -137,6 +137,35 @@ def historical_by_market(session: Session) -> dict[str, dict]:
     return _ctx("historical_by_market", load)  # type: ignore[return-value]
 
 
+def thresholds_hash() -> str:
+    import hashlib
+    import json
+
+    payload = {
+        k: getattr(settings, k)
+        for k in (
+            "min_edge_pp", "min_ev_pct", "min_odd", "max_odd", "margin_method", "default_simulations",
+            "gate_min_data_quality", "gate_min_confidence", "gate_min_sample", "gate_max_disagreement_pp",
+            "gate_max_edge_pp_uncalibrated", "high_probability_min", "opportunity_weights",
+        )
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:10]
+
+
+def odds_version(session: Session, event_id: int) -> str:
+    """Última MUDANÇA de preço gravada (snapshots idênticos não são duplicados)."""
+    from ..db.models import OddsSnapshot
+
+    ts = session.execute(select(func.max(OddsSnapshot.collected_at)).where(OddsSnapshot.event_id == event_id)).scalar()
+    return ts.isoformat(timespec="seconds") if ts else "none"
+
+
+def cache_key(session: Session, row: Event) -> str:
+    """event|pipeline|odds-version|settings-hash — muda quando qualquer insumo determinante muda.
+    Histórico: sync_history chama invalidate_cache(), então não precisa entrar na chave."""
+    return f"{row.id}|{versions.PIPELINE}|{odds_version(session, row.id)}|{thresholds_hash()}"
+
+
 def datasets_with_odds(store) -> set[str]:
     return _ctx("datasets_with_odds", lambda: store.datasets_with_odds())  # type: ignore[return-value]
 
@@ -250,10 +279,9 @@ def analyze_event(
     save_snapshot: bool = True,
     use_cache: bool = True,
 ) -> MatchAnalysis:
-    if use_cache and not force_odds:
-        hit = cached_analysis(event_id)
-        if hit is not None and (simulations is None or hit.simulation is None or hit.simulation.simulations == simulations):
-            return hit
+    hit = cached_analysis(event_id) if use_cache and not force_odds else None
+    if hit is not None and not (simulations is None or hit.simulation is None or hit.simulation.simulations == simulations):
+        hit = None
 
     sync = SuperbetSync()
     odds_status = sync.sync_odds(session, event_id, force=force_odds)
@@ -262,6 +290,11 @@ def analyze_event(
     row = session.get(Event, event_id)
     if row is None:
         raise LookupError(f"evento {event_id} não encontrado")
+
+    # Cache por versão: serve a análise em cache só se nada que a determina mudou —
+    # versão do pipeline, limiares, e nenhuma odd nova gravada desde então.
+    if hit is not None and hit.cache_key == cache_key(session, row):
+        return hit
 
     warnings: list[str] = []
     attempts: list[SourceAttempt] = []
@@ -483,6 +516,7 @@ def analyze_event(
         why_not=event_why_not,
         quality_gate_passed=any(r.status == "RECOMMENDED" and r.quality_gate is not None and r.quality_gate.passed for r in recs),
         evidence=evidence,  # type: ignore[arg-type]
+        cache_key=cache_key(session, row),
     )
     analysis.explanation = explain(analysis)
     for r in analysis.recommendations:

@@ -15,6 +15,7 @@ from ..domain.analysis import (
 )
 from ..domain.freshness import FreshnessStatus
 from ..models.calibration import pick
+from ..providers.player import player_market_verdict
 from .confidence import grade_for
 from .edge import CATEGORY_BY_MARKET, WATCH_ONLY_MARKETS, edge_and_ev, model_probability
 from .gate import GateContext, quality_gate
@@ -114,9 +115,10 @@ def evaluate(
                 market_key="PLAYER_TO_SCORE", market_label=player_markets[0].label, selection_key="*",
                 selection_name=f"{n_players} jogadores ofertados", line=None, odd=0.0, model_prob=0.0,
                 market_prob=0.0, market_prob_is_fair=False, edge_pp=0.0, ev_pct=0.0, confidence_score=0.0,
-                confidence_grade="D", opportunity_score=0.0, status="NO_BET", reasons=["LINEUP_UNCERTAINTY"],
+                confidence_grade="D", opportunity_score=0.0, status="NO_BET", reasons=[player_market_verdict()[0]],
                 category="JOGADOR",
-                explanation="Player Engine desativado: sem fonte pública de minutos/xG e escalação não confirmada.",
+                explanation=player_market_verdict()[1],
+                why_not=[player_market_verdict()[1]],
             )
         )
 

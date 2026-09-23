@@ -415,3 +415,4 @@ class MatchAnalysis(BaseModel):
     why_not: list[str] = Field(default_factory=list)  # motivos do NO BET a nível de evento (WHY NOT)
     quality_gate_passed: bool = False  # alguma seleção RECOMMENDED passou no quality gate
     evidence: EvidenceLevel | None = None  # evidência modelo × mercado para a competição
+    cache_key: str | None = None  # event|pipeline|odds-version|settings-hash

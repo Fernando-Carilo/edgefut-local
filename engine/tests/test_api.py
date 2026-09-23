@@ -133,3 +133,39 @@ def test_jobs_alerts_calibration_endpoints(client):
     assert c["min_n"] == 300 and c["diagram"]["sample"] == 0 and c["diagram"]["reliable"] is False
     assert len(c["diagram"]["buckets"]) == 10 and c["diagram"]["buckets"][0]["bucket"] == "0-10"
     assert client.get("/events/123456789/conflicts").status_code == 404
+
+
+def test_sources_v2_cards_are_honest_about_player_data(client):
+    s = client.get("/sources").json()
+    cards = {c["key"]: c for c in s["cards"]}
+    assert {"superbet", "superbet_live", "fixtures", "football_data", "international_results", "results", "player_data", "ollama"} <= set(cards)
+    assert cards["player_data"]["status"] == "UNAVAILABLE" and "PLAYER DATA UNAVAILABLE" in cards["player_data"]["summary"]
+    assert "odds históricas" in " ".join(cards["international_results"]["does_not_provide"])
+    for c in cards.values():
+        assert c["status"] in {"HEALTHY", "DEGRADED", "STALE", "UNAVAILABLE"}
+
+
+def test_player_engine_is_architecture_only():
+    from edgefut.providers.player import PlayerProvider, player_market_verdict, registry
+
+    assert registry().available is False and registry().status == "PLAYER DATA UNAVAILABLE"
+    reason, detail = player_market_verdict()
+    assert reason == "LINEUP_UNCERTAINTY" and "PLAYER DATA UNAVAILABLE" in detail
+    import pytest
+
+    with pytest.raises(TypeError):
+        PlayerProvider()  # abstrato: não pode ser instanciado sem implementar o contrato
+
+
+def test_cache_key_changes_with_thresholds_and_pipeline_version():
+    from edgefut.analysis.pipeline import thresholds_hash
+    from edgefut.core.config import settings
+
+    a = thresholds_hash()
+    old = settings.min_edge_pp
+    settings.min_edge_pp = old + 1
+    try:
+        assert thresholds_hash() != a
+    finally:
+        settings.min_edge_pp = old
+    assert thresholds_hash() == a

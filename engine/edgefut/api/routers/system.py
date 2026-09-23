@@ -171,6 +171,8 @@ def sources(session: Session = Depends(get_session), log_limit: int = Query(50, 
                     "collected_at": str(r["collected_at"]) if r["collected_at"] is not None else None,
                     "source": r["source"],
                     "source_url": r["source_url"],
+                    "has_odds": int(r.get("rows_with_odds") or 0) >= 200,
+                    "evidence": "BACKTEST_ODDS" if int(r.get("rows_with_odds") or 0) >= 200 else "MODEL_ONLY",
                     "coverage": {
                         "corners_pct": round(100 * float(r["rows_with_corners"]) / max(1, int(r["rows"])), 1),
                         "shots_pct": round(100 * float(r["rows_with_shots"]) / max(1, int(r["rows"])), 1),
@@ -225,9 +227,16 @@ def sources(session: Session = Depends(get_session), log_limit: int = Query(50, 
             "stats": {"available": ollama.is_available()},
         },
     ]
+    from ...quality.health import source_cards
+
+    try:
+        cards = [c.model_dump(mode="json") for c in source_cards(session)]
+    except Exception as exc:  # noqa: BLE001 — cards são auxiliares; a página não pode cair por eles
+        cards = [{"key": "error", "name": "Fontes V2", "kind": "error", "status": "UNAVAILABLE", "summary": str(exc)}]
     return {
         "generated_at": datetime.utcnow(),
         "providers": providers,
+        "cards": cards,
         "datasets": datasets,
         "dataset_states": states,
         "hosts": get_http_client().host_status(),

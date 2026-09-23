@@ -263,6 +263,91 @@ def system_health(session: Session) -> SystemHealth:
     return SystemHealth(generated_at=datetime.utcnow(), overall=overall, components=comps)
 
 
+class SourceCard(BaseModel):
+    """Fontes V2: um card por fonte com saúde, frescor, latência e o que ela pode/não pode dar."""
+
+    key: str
+    name: str
+    kind: str  # odds | live | fixtures | historical | results | player | explanation
+    status: HealthStatus
+    summary: str
+    freshness: Freshness | None = None
+    last_ok: datetime | None = None
+    avg_latency_ms: int | None = None
+    error_rate: float | None = None
+    requests_24h: int | None = None
+    provides: list[str] = []
+    does_not_provide: list[str] = []
+    url: str | None = None
+    note: str | None = None
+
+
+def source_cards(session: Session) -> list[SourceCard]:
+    sb = superbet_health(session)
+    fx = fixtures_health(session)
+    hist = historical_health(session)
+    res = results_health(session)
+    intl = _provider_stats(session, "international_results")
+    fd = _provider_stats(session, "football-data.co.uk")
+    from ..collectors.live import MAX_FULL_MARKET_FETCHES, live_snapshot
+
+    live = live_snapshot()
+    live_fr = live.get("freshness")
+    live_status: HealthStatus = "UNAVAILABLE" if not live.get("available") else ("STALE" if live_fr and live_fr.get("status") in ("STALE", "EXPIRED") else "HEALTHY")
+    return [
+        SourceCard(
+            key="superbet", name="Superbet — odds pré-jogo", kind="odds", status=sb.status, summary=sb.summary, freshness=sb.freshness,
+            last_ok=sb.details.get("last_ok"), avg_latency_ms=sb.details.get("avg_latency_ms"), error_rate=sb.details.get("error_rate"),
+            requests_24h=sb.details.get("total"), url=settings.superbet_base_url,
+            provides=["eventos e horários", "odds por mercado/seleção (histórico de mudanças)", "status do evento", "placar final (cruzado com histórico)"],
+            does_not_provide=["escalações", "xG", "estatísticas de jogadores", "odds de outras casas"],
+            note="Somente endpoints públicos da oferta. Sem login, sem credenciais, sem apostas.",
+        ),
+        SourceCard(
+            key="superbet_live", name="Superbet — ao vivo (observação)", kind="live", status=live_status,
+            summary=f"{len(live.get('events') or [])} jogos em andamento · atualizado {_ago(live.get('updated_at'))}" if live.get("available") else (f"Sem poll concluído ainda (próximo em {settings.live_poll_seconds}s)" if not live.get("last_error") else f"Fonte indisponível: {live.get('last_error')} · backoff {live.get('backoff_s')}s"),
+            freshness=Freshness(**live_fr) if live_fr else None, avg_latency_ms=sb.details.get("avg_latency_ms"),
+            provides=["placar", "minuto", "escanteios/cartões quando expostos", "odds ao vivo dos jogos acompanhados"],
+            does_not_provide=["recomendações ao vivo", "estatísticas não expostas pela fonte (nunca inventadas)"],
+            note=f"Polling a cada {settings.live_poll_seconds}s com backoff exponencial; máximo {MAX_FULL_MARKET_FETCHES} eventos com mercados completos por ciclo.",
+        ),
+        SourceCard(
+            key="fixtures", name="Calendário (Superbet by-date)", kind="fixtures", status=fx.status, summary=fx.summary, freshness=fx.freshness,
+            last_ok=fx.last_update, provides=["jogos das próximas 48–168 h", "competição/categoria", "mercado principal"],
+            does_not_provide=["estádio/cidade (mando inferido: UNCONFIRMED quando não há confirmação)"],
+        ),
+        SourceCard(
+            key="football_data", name="football-data.co.uk — ligas de clubes", kind="historical", status=hist.status, summary=hist.summary, freshness=hist.freshness,
+            last_ok=fd.get("last_ok"), avg_latency_ms=fd.get("avg_latency_ms"), error_rate=fd.get("error_rate"), requests_24h=fd.get("total"),
+            url="https://www.football-data.co.uk/",
+            provides=["resultados", "finalizações e no alvo", "escanteios", "cartões", "odds B365 pré-fechamento e de fechamento (backtest e CLV)"],
+            does_not_provide=["escalações", "xG", "competições fora das 10 ligas mapeadas"],
+        ),
+        SourceCard(
+            key="international_results", name="martj42/international_results — seleções", kind="historical", status=hist.status, summary=hist.summary, freshness=hist.freshness,
+            last_ok=intl.get("last_ok"), avg_latency_ms=intl.get("avg_latency_ms"), error_rate=intl.get("error_rate"), requests_24h=intl.get("total"),
+            url="https://github.com/martj42/international_results",
+            provides=["resultados desde 1872", "cidade/país", "flag de campo neutro"],
+            does_not_provide=["odds históricas (→ evidência MODEL_ONLY)", "escanteios", "cartões", "finalizações"],
+        ),
+        SourceCard(
+            key="results", name="Resultados / liquidação", kind="results", status=res.status, summary=res.summary, freshness=res.freshness, last_ok=res.last_update,
+            provides=["liquidação de previsões (Superbet + histórico curado)", "conflitos de placar registrados"],
+            does_not_provide=["resultados de competições sem fonte"],
+        ),
+        SourceCard(
+            key="player_data", name="Jogadores / escalações", kind="player", status="UNAVAILABLE",
+            summary="PLAYER DATA UNAVAILABLE — nenhum provider público e permitido integrado.",
+            provides=[], does_not_provide=["escalações", "minutos", "xG de jogador", "lesões"],
+            note="Arquitetura pronta (providers/player); mercados de jogador → NO BET (LINEUP_UNCERTAINTY).",
+        ),
+        SourceCard(
+            key="ollama", name="Ollama (LLM local, opcional)", kind="explanation", status=ollama_health().status, summary=ollama_health().summary,
+            url=settings.ollama_base_url, provides=["reescrita de explicações a partir de fatos calculados"], does_not_provide=["estatísticas", "probabilidades", "recomendações"],
+        ),
+    ]
+
+
 def _ago(dt: datetime | None) -> str:
     if dt is None:
         return "nunca"
