@@ -13,6 +13,7 @@ from ..domain.analysis import (
     Recommendation,
     SimulationOutput,
 )
+from ..models.calibration import pick
 from .confidence import grade_for
 from .edge import CATEGORY_BY_MARKET, WATCH_ONLY_MARKETS, edge_and_ev, model_probability
 
@@ -76,6 +77,8 @@ def evaluate(
     unreliable_source: bool,
     market_calibration: dict[str, float] | None = None,
     stale_data: str | None = None,
+    calibrators: dict | None = None,
+    competition: str | None = None,
 ) -> tuple[list[Recommendation], NoBetVerdict]:
     event_block = _event_no_bet(
         supported=supported, teams_resolved=teams_resolved, min_sample=min_sample, sim=sim,
@@ -109,6 +112,10 @@ def evaluate(
             if mp is None:
                 continue  # sem modelo para esta seleção — não inventamos
 
+            raw_p = mp
+            cal = pick(calibrators, market.market_key, competition) if calibrators else None
+            cal_p = round(cal(raw_p), 4) if cal is not None else None
+            mp = cal_p if cal_p is not None else raw_p
             sel.model_prob = round(mp, 4)
             edge_pp, ev_pct = edge_and_ev(mp, market_prob, sel.price)
             sel.edge_pp, sel.ev_pct = edge_pp, ev_pct
@@ -125,10 +132,10 @@ def evaluate(
                 conf_score *= 0.6
                 reasons.append("mercado de alta variância / aproximação")
             grade = grade_for(conf_score)
-            cal = market_calibration.get(market.market_key)
+            cal_quality = market_calibration.get(market.market_key)
             opp = opportunity_score(
                 data_quality=data_quality.score, confidence=conf_score, edge_pp=edge_pp,
-                movement_pct=sel.movement_pct, calibration=cal,
+                movement_pct=sel.movement_pct, calibration=cal_quality,
             )
 
             status = "RECOMMENDED"
@@ -149,6 +156,8 @@ def evaluate(
                 Recommendation(
                     market_key=market.market_key, market_label=market.label, selection_key=sel.key,
                     selection_name=sel.name, line=market.line, odd=sel.price, model_prob=round(mp, 4),
+                    model_prob_raw=round(raw_p, 4), model_prob_calibrated=cal_p,
+                    calibration_group=cal.group_key if cal is not None else None, calibration_reliable=cal is not None,
                     market_prob=round(market_prob, 4), market_prob_is_fair=sel.fair is not None,
                     edge_pp=edge_pp, ev_pct=ev_pct, confidence_score=round(conf_score, 1), confidence_grade=grade,
                     opportunity_score=opp, status=status, reasons=reasons, category=category,  # type: ignore[arg-type]

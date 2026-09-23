@@ -277,7 +277,11 @@ class Recommendation(BaseModel):
     selection_name: str
     line: float | None
     odd: float
-    model_prob: float
+    model_prob: float  # probabilidade usada na decisão (calibrada quando confiável, senão crua)
+    model_prob_raw: float | None = None
+    model_prob_calibrated: float | None = None  # só quando há calibrador confiável (N>=300)
+    calibration_group: str | None = None
+    calibration_reliable: bool = False
     market_prob: float
     market_prob_is_fair: bool
     edge_pp: float

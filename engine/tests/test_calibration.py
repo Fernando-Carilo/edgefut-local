@@ -59,3 +59,40 @@ def test_pick_prefers_competition_then_global_then_none():
 
 def test_apply_without_fit_is_identity():
     assert apply_isotonic([], [], 0.37) == 0.37
+
+
+def test_engine_uses_calibrated_probability_only_when_reliable():
+    from edgefut.domain.analysis import ConfidenceBreakdown, CountDistribution, DataQuality, GoalsModelOutput, MarketOdds, SelectionOdds
+    from edgefut.recommendations.engine import evaluate
+    from edgefut.simulation.monte_carlo import simulate
+
+    sim = simulate(GoalsModelOutput(model_version="t", lambda_home=1.8, lambda_away=0.8, rho=-0.05, fit_matches=400), 10_000, seed=7)
+    sels = [
+        SelectionOdds(key="HOME", name="1", price=1.9, implied=0.5263, fair=0.5),
+        SelectionOdds(key="DRAW", name="X", price=4.0, implied=0.25, fair=0.2375),
+        SelectionOdds(key="AWAY", name="2", price=6.0, implied=0.1667, fair=0.1583),
+    ]
+    market = MarketOdds(market_key="1X2", label="1X2", line=None, selections=sels, overround=0.05, margin_removed=True)
+    empty = CountDistribution(model_version="t", available=False)
+    common = dict(
+        markets=[market], sim=sim, corners=empty, cards=empty, confidence=ConfidenceBreakdown(model_version="t", score=85, grade="A", components=[]),
+        data_quality=DataQuality(score=90, checks=[]), supported=True, teams_resolved=True, min_sample=30, model_disagreement_pp=1.0, unreliable_source=False,
+    )
+    # calibrador que "encolhe" tudo para 0.5·p + 0.25 (superconfiança corrigida)
+    shrink = Calibrator("1X2|GLOBAL", 500, True, [0.0, 1.0], [0.25, 0.75], None, None)
+    raw_recs, _ = evaluate(**common)
+    cal_recs, _ = evaluate(**common, calibrators={"1X2|GLOBAL": shrink}, competition="Qualquer")
+    raw_home = next(r for r in raw_recs if r.selection_key == "HOME")
+    cal_home = next(r for r in cal_recs if r.selection_key == "HOME")
+    assert raw_home.model_prob_raw == raw_home.model_prob and raw_home.model_prob_calibrated is None and not raw_home.calibration_reliable
+    assert cal_home.model_prob_raw == raw_home.model_prob_raw
+    assert cal_home.calibration_reliable and cal_home.calibration_group == "1X2|GLOBAL"
+    assert abs(cal_home.model_prob_calibrated - (0.25 + 0.5 * cal_home.model_prob_raw)) < 1e-3
+    assert cal_home.model_prob == cal_home.model_prob_calibrated
+    # edge é recalculado com a probabilidade calibrada
+    assert abs(cal_home.edge_pp - (cal_home.model_prob - cal_home.market_prob) * 100) < 0.02
+    # calibrador NÃO confiável → probabilidade crua, mesmo que exista
+    weak = Calibrator("1X2|GLOBAL", 20, False, [0.0, 1.0], [0.25, 0.75], None, None)
+    weak_recs, _ = evaluate(**common, calibrators={"1X2|GLOBAL": weak})
+    weak_home = next(r for r in weak_recs if r.selection_key == "HOME")
+    assert weak_home.model_prob == raw_home.model_prob and weak_home.model_prob_calibrated is None

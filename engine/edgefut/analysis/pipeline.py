@@ -43,6 +43,7 @@ from ..features.strength import (
 from ..features.venue import resolve_venue
 from ..models.counts import cards_engine, corners_engine, shots_engine
 from ..models.dixon_coles import dc_cache, dixon_coles_output, fit_dixon_coles
+from ..models.calibration import Calibrator, load_calibrators
 from ..models.elo import elo_cache, elo_output, fit_elo
 from ..models.poisson import poisson_model
 from ..normalization import CompetitionProfile, classify_competition, is_womens
@@ -79,11 +80,27 @@ def all_cached() -> list[MatchAnalysis]:
         return [a for _, a in _cache.values() if a.event.kickoff_utc > now - timedelta(hours=2)]
 
 
+_calibrators: dict[str, Calibrator] | None = None
+
+
+def calibrators(session: Session) -> dict[str, Calibrator]:
+    global _calibrators
+    if _calibrators is None:
+        try:
+            _calibrators = load_calibrators(session)
+        except Exception as exc:  # noqa: BLE001 — sem calibradores → probabilidades cruas
+            log.warning("calibradores indisponíveis: %s", exc)
+            _calibrators = {}
+    return _calibrators
+
+
 def invalidate_cache() -> None:
+    global _calibrators
     with _cache_lock:
         _cache.clear()
     elo_cache.clear()
     dc_cache.clear()
+    _calibrators = None
 
 
 def event_summary(row: Event, session: Session | None = None, main_odds: dict[str, float] | None = None) -> EventSummary:
@@ -317,7 +334,7 @@ def analyze_event(
         markets=markets, sim=sim, corners=corners, cards=cards, confidence=conf, data_quality=dq,
         supported=profile.supported, teams_resolved=resolved.ok, min_sample=min(home.sample_size, away.sample_size),
         model_disagreement_pp=disagreement, unreliable_source=unreliable, market_calibration=calibration,
-        stale_data=stale_reason,
+        stale_data=stale_reason, calibrators=calibrators(session), competition=row.competition_name,
     )
     if not profile.supported and profile.reason:
         warnings.append(profile.reason)
