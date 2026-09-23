@@ -8,8 +8,8 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { useParams } from "react-router-dom";
 
-import { RecommendationCard } from "@/components/EventCard";
-import { Card, EdgeValue, ErrorBox, GradeBadge, KV, Loading, MeterBar, ProbBar, Score, SectionTitle, StatusChip, Tooltip, VenueChip } from "@/components/ui";
+import { ConfidenceIndicator, ConflictsButton, EvidenceBanner, EventWhyNot, FreshnessStrip, ModelComparisonTable, MovementLine, RecommendationDetail } from "@/components/TrustPanels";
+import { Card, EdgeValue, ErrorBox, EvidenceChip, GateChip, GradeBadge, KV, Loading, MeterBar, ProbBar, Score, SectionTitle, StatusChip, Tooltip, VenueChip } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useUi } from "@/store/ui";
 
@@ -84,14 +84,17 @@ export function MatchPage() {
                   {w}
                 </span>
               ))}
+              <EvidenceChip level={a.evidence} compact />
+              <GateChip passed={a.quality_gate_passed} />
+              <ConflictsButton eventId={eventId} count={a.conflicts_count} canonicalId={a.canonical_event_id} />
+            </div>
+            <div className="mt-2">
+              <FreshnessStrip items={a.freshness} overall={a.freshness_status} />
             </div>
           </div>
           <div className="flex items-center gap-4">
             <DataQualityBadge a={a} />
-            <div className="text-center">
-              <GradeBadge grade={a.confidence.grade} score={a.confidence.score} size="lg" />
-              <div className="label mt-1">Confiança</div>
-            </div>
+            <ConfidenceIndicator c={a.confidence} />
             <Score value={a.opportunity_score} label="Opportunity" />
             <div className="flex flex-col gap-1">
               <button className={clsx("btn-outline", e.is_favorite && "text-primary")} onClick={() => fav.mutate(!e.is_favorite)}>
@@ -125,30 +128,48 @@ export function MatchPage() {
       </Card>
 
       {/* Veredito */}
+      <EvidenceBanner level={a.evidence} />
       {a.no_bet.no_bet ? (
-        <Card className="flex items-start gap-3 border-l-4 border-l-ink-2 bg-gray-50">
-          <ShieldAlert className="mt-0.5 shrink-0 text-ink-2" />
-          <div>
-            <div className="text-base font-bold">NENHUMA ENTRADA RECOMENDADA</div>
-            <div className="text-sm text-ink-2">
-              <b>{a.no_bet.reason ? NO_BET_LABELS[a.no_bet.reason] : ""}</b> {a.no_bet.detail ? `— ${a.no_bet.detail}` : ""}
+        <Card className="border-l-4 border-l-ink-2 bg-gray-50">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="mt-0.5 shrink-0 text-ink-2" />
+            <div className="min-w-0 flex-1">
+              <div className="text-base font-bold">NENHUMA ENTRADA RECOMENDADA</div>
+              <div className="text-sm text-ink-2">
+                <b>{a.no_bet.reason ? NO_BET_LABELS[a.no_bet.reason] : ""}</b> {a.no_bet.detail ? `— ${a.no_bet.detail}` : ""}
+              </div>
+              <EventWhyNot a={a} />
             </div>
           </div>
         </Card>
       ) : recommended.length === 0 ? (
-        <Card className="flex items-start gap-3 border-l-4 border-l-warning bg-warning-50/40">
-          <ShieldAlert className="mt-0.5 shrink-0 text-warning" />
-          <div>
-            <div className="text-base font-bold">NENHUMA ENTRADA RECOMENDADA</div>
-            <div className="text-sm text-ink-2">Nenhum mercado atinge simultaneamente edge, EV, faixa de odd e confiança mínimos. {watch.length > 0 ? `${watch.length} seleção(ões) em observação abaixo.` : ""}</div>
+        <Card className="border-l-4 border-l-warning bg-warning-50/40">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="mt-0.5 shrink-0 text-warning" />
+            <div className="min-w-0 flex-1">
+              <div className="text-base font-bold">NENHUMA ENTRADA RECOMENDADA</div>
+              <div className="text-sm text-ink-2">Nenhum mercado passou simultaneamente nos limiares e no Quality Gate. {watch.length > 0 ? `${watch.length} seleção(ões) em observação abaixo — com o motivo.` : ""}</div>
+              <EventWhyNot a={a} />
+            </div>
           </div>
         </Card>
       ) : (
         <section>
-          <SectionTitle title="Melhores mercados" subtitle="Somente seleções com edge, EV e confiança acima dos limiares" />
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {recommended.slice(0, 6).map((r, i) => (
-              <RecommendationCard key={i} event={e} rec={r} />
+          <SectionTitle title="Melhores mercados" subtitle="Somente seleções que passaram em todos os checks do Quality Gate · WHY THIS BET e limitações explícitas" />
+          <div className="space-y-3">
+            {recommended.slice(0, 4).map((r, i) => (
+              <RecommendationDetail key={i} r={r} evidence={a.evidence} />
+            ))}
+          </div>
+          {recommended.length > 4 && <div className="mt-2 text-xs text-ink-2">+{recommended.length - 4} recomendações adicionais na tabela de mercados abaixo.</div>}
+        </section>
+      )}
+      {watch.length > 0 && (
+        <section>
+          <SectionTitle title="Em observação" subtitle="Edge existe, mas algum check falhou. Não são recomendações." />
+          <div className="space-y-3">
+            {watch.slice(0, 3).map((r, i) => (
+              <RecommendationDetail key={i} r={r} evidence={a.evidence} />
             ))}
           </div>
         </section>
@@ -215,9 +236,18 @@ export function MatchPage() {
           {sim ? (
             <div className="space-y-4">
               <ProbBar home={sim.p_home} draw={sim.p_draw} away={sim.p_away} labels={[a.home.name, "Empate", a.away.name]} />
+              {a.model_comparison ? (
+                <div>
+                  <div className="label mb-1">Comparação de modelos · consenso ponderado</div>
+                  <ModelComparisonTable mc={a.model_comparison} />
+                </div>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <ModelMini title={`Poisson · ${a.poisson.model_version}`} m={a.poisson} />
+                  <ModelMini title={`Dixon-Coles · ${a.dixon_coles.model_version}`} m={a.dixon_coles} />
+                </div>
+              )}
               <div className="grid gap-3 md:grid-cols-3">
-                <ModelMini title={`Poisson · ${a.poisson.model_version}`} m={a.poisson} />
-                <ModelMini title={`Dixon-Coles · ${a.dixon_coles.model_version}`} m={a.dixon_coles} />
                 <div className="rounded-lg bg-bg p-3">
                   <div className="label">ELO · {a.elo.model_version}</div>
                   {a.elo.available ? (
@@ -233,9 +263,7 @@ export function MatchPage() {
                     <div className="text-xs text-ink-2">{a.elo.note}</div>
                   )}
                 </div>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div>
+                <div className="md:col-span-2">
                   <div className="label mb-1">Gols esperados</div>
                   <div className="flex items-center gap-3">
                     <span className="text-2xl font-bold tabular-nums text-primary">{num(sim.expected_goals_home, 2)}</span>
@@ -253,7 +281,7 @@ export function MatchPage() {
                     </div>
                   </div>
                 </div>
-                <div>
+                <div className="md:col-span-3">
                   <div className="label mb-1">Distribuição de gols totais</div>
                   <ResponsiveContainer width="100%" height={110}>
                     <BarChart data={sim.total_goals_dist.map((p, i) => ({ g: i === 6 ? "6+" : String(i), p: +(p * 100).toFixed(1) }))}>
@@ -576,35 +604,65 @@ function OddsMovement({ eventId, markets }: { eventId: number; markets: MarketOd
   const data = [...points.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, v]) => v);
   const colors = ["#FF2638", "#98A2B3", "#2E90FA", "#12B76A", "#F79009", "#7A5AF8"];
   const opening = markets.find((m) => m.market_key === "1X2")?.selections;
+  const movement = q.data.movement;
+  const closing = Object.entries(q.data.closing);
+  const nameFor = (k: string) => {
+    const [mk, sk, line] = k.split("|");
+    const m = markets.find((x) => x.market_key === mk && String(x.line) === (line === "None" ? "null" : line));
+    const s = m?.selections.find((x) => x.key === sk);
+    return s ? `${m!.label}: ${s.name}${m!.line !== null && !s.name.includes(String(m!.line)) ? ` ${m!.line}` : ""}` : k.replace("|None", "").replace(/\|/g, " ");
+  };
+  const shown = keys.filter((k) => movement[k]);
   return (
     <Card>
-      <SectionTitle title="Movimento de odds" subtitle={`${data.length} coletas locais · abertura = primeira coleta feita por este app`} />
+      <SectionTitle
+        title="Movimento de linha"
+        subtitle={`${data.length} coletas locais · abertura = primeira coleta feita por este app · a odd de fechamento (quando capturada) só entra no CLV, nunca na recomendação`}
+        right={
+          <Tooltip text="Movimento extremo (queda de odd acima do limiar) vira motivo de NO BET: quando o mercado corre muito, o modelo pré-jogo pode estar desatualizado.">
+            <Info size={13} className="text-ink-3" />
+          </Tooltip>
+        }
+      />
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <ResponsiveContainer width="100%" height={180}>
+          <ResponsiveContainer width="100%" height={200}>
             <LineChart data={data}>
               <CartesianGrid stroke="#EEF0F3" vertical={false} />
               <XAxis dataKey="t" tick={{ fontSize: 11 }} />
               <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={40} />
               <RTooltip />
               {keys.map((k, i) => (
-                <Line key={k} type="monotone" dataKey={k} name={k.replace("|None", "").replace("|", " ")} stroke={colors[i]} dot={false} strokeWidth={2} connectNulls />
+                <Line key={k} type="stepAfter" dataKey={k} name={nameFor(k)} stroke={colors[i]} dot={{ r: 2 }} strokeWidth={2} connectNulls />
               ))}
             </LineChart>
           </ResponsiveContainer>
         </div>
         <div className="space-y-1.5 text-sm">
-          {opening?.map((s) => (
-            <div key={s.key} className="flex items-center justify-between rounded-md bg-bg px-3 py-1.5">
-              <span className="font-medium">{s.name}</span>
-              <span className="tabular-nums">
-                {odd(s.opening_price)} → <b>{odd(s.price)}</b>{" "}
-                <span className={clsx("text-xs", (s.movement_pct ?? 0) < -0.5 ? "text-primary" : (s.movement_pct ?? 0) > 0.5 ? "text-info" : "text-ink-3")}>
-                  {s.movement_pct !== null ? `${s.movement_pct > 0 ? "+" : ""}${s.movement_pct.toFixed(1)}%` : "—"}
-                </span>
-              </span>
+          {shown.length > 0
+            ? shown.map((k) => <MovementLine key={k} m={movement[k]} name={nameFor(k)} />)
+            : opening?.map((s) => (
+                <div key={s.key} className="flex items-center justify-between rounded-md bg-bg px-3 py-1.5">
+                  <span className="font-medium">{s.name}</span>
+                  <span className="tabular-nums">
+                    {odd(s.opening_price)} → <b>{odd(s.price)}</b>{" "}
+                    <span className={clsx("text-xs", (s.movement_pct ?? 0) < -0.5 ? "text-primary" : (s.movement_pct ?? 0) > 0.5 ? "text-info" : "text-ink-3")}>
+                      {s.movement_pct !== null ? `${s.movement_pct > 0 ? "+" : ""}${s.movement_pct.toFixed(1)}%` : "—"}
+                    </span>
+                  </span>
+                </div>
+              ))}
+          {closing.length > 0 && (
+            <div className="rounded-md border border-line px-3 py-1.5 text-xs">
+              <div className="mb-0.5 font-semibold">Closing line (só CLV)</div>
+              {closing.slice(0, 6).map(([k, v]) => (
+                <div key={k} className="flex justify-between text-ink-2">
+                  <span className="truncate">{nameFor(k)}</span>
+                  <span className="tabular-nums">{odd(v)}</span>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       </div>
     </Card>
