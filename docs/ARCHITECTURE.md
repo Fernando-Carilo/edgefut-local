@@ -12,7 +12,7 @@
 │  │  React + TypeScript + Vite + Tailwind + TanStack Query + Zustand │  │
 │  │  Radar V2 · Jogos · Página do Jogo · Melhores Entradas · Lab ·  │  │
 │  │  Ao Vivo · Histórico · Fontes V2 · Modelos · Performance ·       │  │
-│  │  Alertas · Sistema (Jobs · Diagnóstico) · Edge AI                │  │
+│  │  Validação · Alertas · Sistema (Jobs · Diagnóstico) · Edge AI    │  │
 │  └───────────────────────────┬────────────────────────────────────┘  │
 │                              │ HTTP (127.0.0.1:8765)                  │
 │  ┌───────────────────────────▼────────────────────────────────────┐  │
@@ -49,6 +49,17 @@ OPORTUNIDADES depois de um **Quality Gate** explícito. Toda execução roda den
 de um `correlation id` (`core/context.py`) que aparece nos logs JSON e em
 `job_run`.
 
+Desde a iteração 3 o pipeline responde também "isso tem **valor** ou só
+**probabilidade**?": toda leitura de histórico passa pela
+`TemporalFeatureStore` (anti-leakage), cada seleção recebe um **estado**
+(`MODEL_ONLY` / `MARKET_OBSERVED` / `VALUE_CANDIDATE` / `VALUE` /
+`OBSERVATION` / `NO_BET`), um **cluster** (uma primária por tese) e um
+**price target**; cada análise é comparada com o snapshot anterior (WHY MODEL
+CHANGED) e gravada em **shadow mode** (append-only) para liquidação posterior.
+A camada `validation/` (replay, bootstrap, decay, drift, governança, model
+health) mede o modelo contra baselines e decide — com regra explícita e ação
+humana — quem é o campeão.
+
 ## 3. Estrutura do repositório
 
 ```
@@ -66,17 +77,21 @@ edgefut-local/
 │   │   ├── collectors/        # sync de eventos/odds → SQLite; live.py (polling com backoff)
 │   │   ├── normalization/     # aliases de times, competições, CanonicalEventResolver
 │   │   ├── quality/           # Source Conflict Engine, Health (componentes do sistema)
-│   │   ├── features/          # força, forma, H2H, venue, data quality
-│   │   ├── models/            # ELO, Poisson, Dixon-Coles, Bivariate Poisson, ensemble,
-│   │   │                      # calibração isotônica, registry; corners, cards, shots
+│   │   ├── features/          # força, forma, H2H, venue, data quality, TemporalFeatureStore (as_of)
+│   │   ├── models/            # ELO, Poisson, Dixon-Coles, Bivariate Poisson, ensemble (campeão/challenger),
+│   │   │                      # strength_v2 (+poisson_v2), international_strength, calibração, registry (roles);
+│   │   │                      # corners, cards, shots
 │   │   ├── simulation/        # Monte Carlo
 │   │   ├── odds/              # implied (Shin + multiplicativa), movimento, closing line (só CLV)
-│   │   ├── recommendations/   # edge, confiança v2, opportunity v2, gate, why, NO BET, múltiplas
+│   │   ├── recommendations/   # edge, confiança v2, opportunity v3, gate, estados, pricing (price target),
+│   │   │                      # correlation (clusters/exposição), why, NO BET, múltiplas
+│   │   ├── validation/        # replay (baselines), bootstrap/sample quality, decay walk-forward, shadow,
+│   │   │                      # drift, governance (champion/challenger), model_health
 │   │   ├── explanations/      # templates PT-BR, Edge AI (grounded), Ollama opcional
-│   │   ├── backtesting/       # Lab (as_of), settlement, métricas, performance por grupo
-│   │   ├── alerts/            # alertas locais (tabela alert)
-│   │   ├── scheduler/         # APScheduler V2: 11 jobs com job_run + correlation id
-│   │   └── analysis/          # orquestração do pipeline por evento (cache por versão)
+│   │   ├── backtesting/       # Lab (as_of), settlement, reconciliação, métricas, performance por grupo/cluster/estado
+│   │   ├── alerts/            # alertas locais (tabela alert) + watchlist de preço
+│   │   ├── scheduler/         # APScheduler V2: 14 jobs com job_run + correlation id
+│   │   └── analysis/          # orquestração do pipeline por evento (cache por versão), changes (WHY MODEL CHANGED)
 │   └── tests/
 ├── packages/
 │   ├── contracts/             # tipos TypeScript espelhando os schemas Pydantic
@@ -127,7 +142,9 @@ retornam `LINEUP_UNCERTAINTY`.
 
 - **SQLite** (`data/edgefut.sqlite3`): eventos, odds (snapshots), times,
   competições, `prediction_snapshot`, `snapshot_correction`, `closing_line`,
-  `source_conflict`, `model_registry`, `calibration_model`, `job_run`, `alert`,
+  `source_conflict`, `model_registry` (com `role`), `calibration_model`,
+  `shadow_prediction` (append-only), `validation_run` (replay / decay /
+  bootstrap / shadow_report / drift / promotion), `job_run`, `alert`,
   `source_log`, favoritos, settings.
 - **Parquet + DuckDB** (`data/processed/*.parquet`): partidas históricas
   (football-data.co.uk, international_results). Consultas analíticas via DuckDB.
@@ -179,8 +196,14 @@ settled.
 ### 4.6 Modelos, ensemble e calibração
 
 `models/registry.py` mantém `model_registry` (nome, versão, parâmetros,
-treinado em, N). `models/ensemble.py` deriva os pesos por competição a partir
-do log loss walk-forward (N ≥ 200; senão `GLOBAL`) — nunca há peso fixo à mão.
+treinado em, N, **papel** champion / challenger / baseline / none e o
+`champion_consensus` em vigor). `models/ensemble.py` deriva os pesos por
+competição a partir do log loss walk-forward (N ≥ 200; senão `GLOBAL`) — nunca
+há peso fixo à mão. `models/strength_v2.py` (ratings ajustados ao adversário,
+half-life escolhido por walk-forward) e `models/international_strength.py`
+(seleções, tipo de torneio, peso de amistoso) alimentam os challengers
+`poisson_v2` / `ensemble_v2`. A troca de campeão segue
+[`MODEL_GOVERNANCE.md`](MODEL_GOVERNANCE.md).
 `models/calibration.py` ajusta isotônica por (competição, mercado) só com ≥ 300
 amostras liquidadas; a análise sempre expõe RAW e, quando existe, CALIBRATED.
 O cache de análise é chaveado pela tupla de versões de modelo
@@ -188,9 +211,12 @@ O cache de análise é chaveado pela tupla de versões de modelo
 
 ### 4.7 Scheduler, jobs, alertas e saúde
 
-`scheduler/jobs.py` registra 11 jobs (`events`, `odds`, `history`, `settle`,
+`scheduler/jobs.py` registra 14 jobs (`events`, `odds`, `history`, `settle`,
 `radar`, `closing_lines`, `performance`, `calibration`, `ensemble_weights`,
-`cache_cleanup`, `live_poll`). Cada execução grava `job_run` (início, fim,
+`cache_cleanup`, `live_poll`, **`reconcile`** (6 h — classifica todo evento
+terminado, liquida `shadow_prediction`), **`shadow_report`** (24 h) e
+**`drift`** (24 h — só alerta)). No boot, `job_run` em `running` sem processo
+vivo são marcados `interrupted`. Cada execução grava `job_run` (início, fim,
 status, resumo, correlation id) e pode ser disparada manualmente por
 `POST /jobs/{job}/run`. `alerts/` compara o ciclo atual do radar com o anterior
 e grava alertas locais (sem rede, sem push): `ODD_MOVEMENT` (≥ 5 %),
@@ -205,14 +231,18 @@ mostram.
 
 - Rotas: `/` (Início), `/radar`, `/jogos`, `/jogos/:id`, `/entradas`,
   `/ao-vivo`, `/multiplas`, `/lab`, `/historico`, `/favoritos`, `/fontes`,
-  `/modelos`, `/performance`, `/alertas`, `/sistema/jobs`,
+  `/modelos`, `/performance`, `/validacao` (Model Validation · Model
+  Comparison · Coverage Map · Shadow · Drift), `/alertas`, `/sistema/jobs`,
   `/sistema/diagnostico`, `/configuracoes`.
 - Estado servidor: TanStack Query. Estado UI: Zustand (filtros, banca, Edge AI).
 - Design tokens em `apps/desktop/src/styles/tokens.css` (paleta EdgeFut).
 - Componentes de confiança em `components/TrustPanels.tsx`: `ConfidenceIndicator`
   (EDGEFUT CONFIDENCE 0–100 com breakdown), `FreshnessStrip`, `ConflictsModal`,
   `ModelComparisonTable`, `RecommendationDetail` (WHY / WHY NOT, gate,
-  Opportunity V2), `MovementLine`, `EvidenceBanner`.
+  Opportunity V3, `PriceTargetBlock`), `MovementLine`, `EvidenceBanner`,
+  `ClustersPanel` (teses e exposição), `WhyChangedPanel`; `StateChip` /
+  `ExposureChip` em `components/ui.tsx`; `ModelHealthStrip` discreto no
+  Início.
 - Todo número exibido vem do engine. Qualquer dado não real é marcado `DEMO`.
   Ao vivo é observação: a UI não renderiza recomendação nem estatística que a
   fonte não forneceu.

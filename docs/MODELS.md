@@ -6,26 +6,39 @@ a versão utilizada; nunca são recalculados depois do resultado.
 | Modelo | Versão | Arquivo |
 |---|---|---|
 | Team Strength | `strength-v1` | `features/strength.py` |
-| ELO | `elo-v1` | `models/elo.py` |
+| Team Strength opponent-adjusted (challenger) | `strength-v2` | `models/strength_v2.py` |
+| Força de seleções (challenger) | `international-strength-v1` | `models/international_strength.py` |
+| ELO | `elo-v1` (papel `baseline`) | `models/elo.py` |
 | Poisson | `goals-poisson-v1` | `models/poisson.py` |
+| Poisson sobre strength-v2 (challenger) | `goals-poisson-v2` | `models/strength_v2.py` |
 | Dixon-Coles | `goals-dixon-coles-v1` | `models/dixon_coles.py` |
 | Bivariate Poisson | `goals-bivariate-poisson-v1` | `models/bivariate_poisson.py` |
-| Ensemble / consenso | `ensemble-v1` | `models/ensemble.py` |
+| Ensemble / consenso (**campeão**) | `ensemble-v1` | `models/ensemble.py` |
+| Ensemble v2 = v1 + poisson_v2 (challenger) | `ensemble-v1` (chave `ensemble_v2`) | `models/ensemble.py` |
 | Calibração | `calibration-isotonic-v1` | `models/calibration.py` |
 | Monte Carlo | `mc-v1` | `simulation/monte_carlo.py` |
 | Corners | `corners-v1` | `models/counts.py` |
 | Cards | `cards-v1` | `models/counts.py` |
 | Shots | `shots-v1` | `models/counts.py` |
 | Confidence | `confidence-v2` | `recommendations/confidence.py` |
-| Opportunity Score | `opportunity-v2` | `recommendations/opportunity.py` |
-| Pipeline | `pipeline-v2` | `analysis/pipeline.py` |
+| Opportunity Score | `opportunity-v3` | `recommendations/opportunity.py` |
+| Pipeline | `pipeline-v3` | `analysis/pipeline.py` |
 
 A tupla de versões chaveia o cache de análise: mudar qualquer versão invalida
 todas as análises em cache. `model_registry` (sincronizado no boot por
 `models/registry.py`) guarda uma linha por (modelo, versão) com features,
-parâmetros e janela de treino declarados; versões que saem de
-`versions.ALL_MODELS` ficam `deprecated`, nunca são apagadas — um snapshot
-antigo sempre aponta para uma linha existente.
+parâmetros, janela de treino e **papel** (`champion` / `challenger` /
+`baseline` / `none`); versões que saem de `versions.ALL_MODELS` ficam
+`deprecated`, nunca são apagadas — um snapshot antigo sempre aponta para uma
+linha existente. Quem decide em produção, e como um challenger vira campeão,
+está em [`MODEL_GOVERNANCE.md`](MODEL_GOVERNANCE.md).
+
+**Resultado da validação (iteração 3, resumo):** no replay walk-forward de 11
+ligas com odds (N 14.393, 2022–2026) **o mercado é melhor que todos os
+modelos** em 1X2 (Brier 0,5718 vs 0,5857 do campeão, NO CLEAR ADVANTAGE) e em
+OU 2,5; todos os modelos superam os baselines ingênuos de forma CONSISTENT. Em
+seleções (N 15.956, sem odds) o campeão bate o ingênuo em +18,3 % e o ELO em
++3,3 %. Detalhes e IC em [`ITERATION_3_REPORT.md`](ITERATION_3_REPORT.md).
 
 ## 1. Team Strength Engine (`strength-v1`)
 
@@ -46,6 +59,59 @@ defense = média ponderada de gols contra / média de gols da liga (mesma condi�
 
 Score de força exibido (0–100) = combinação do ELO normalizado (60%) e do
 diferencial ofensivo/defensivo (40%).
+
+## 1b. Team Strength opponent-adjusted (`strength-v2`) e `goals-poisson-v2`
+
+O strength-v1 usa médias simples de gols pró/contra — um time que marcou 3 em
+um adversário fraco vale o mesmo que 3 em um forte. O strength-v2 resolve
+ataque e defesa **em função do adversário**, por ponto fixo iterativo
+(40 iterações, tolerância 1e-6), com shrinkage bayesiano:
+
+```
+att_i = (Σ w·gf_i + k) / (Σ w·μ·def_opp·ha + k)      k = PRIOR_K = 6 pseudo-gols → 1,0
+def_i = (Σ w·ga_i + k) / (Σ w·μ·att_opp·ha + k)
+w     = 0,5^(idade_dias / half_life)                  half_life = settings.strength_half_life_days
+```
+
+- ratings por condição (casa / fora) encolhidos para o rating pooled com
+  `COND_K = 10` pseudo-gols;
+- vantagem de mando `ha` estimada por grupo (temporada / tipo de torneio) com
+  ≥ 100 jogos, senão do conjunto, senão 1,15;
+- campo neutro ⇒ `ha = 1`; `UNCONFIRMED` ⇒ raiz quadrada;
+- `MIN_MATCHES = 60`: abaixo disso o modelo não se pronuncia.
+
+`goals-poisson-v2` = Poisson independente sobre `λ_home = μ·att_h·def_a·ha`,
+`λ_away = μ·att_a·def_h`. É **challenger**: entra na comparação de modelos e no
+`ensemble_v2`, não no consenso campeão.
+
+**Half-life escolhido por walk-forward**, não à mão (`validation/decay.py`,
+Validação → Model Comparison): 30 / 60 / 90 / 180 / 365 / 730 / sem decaimento
+sobre 14.152 partidas e 463 janelas → 365 d (0,58737) ≈ 180 d (0,58801,
+diferença inconclusiva) > 730 > none > 90 > 60 > 30. Entre equivalentes, o
+mais simples: **365 dias**.
+
+Resultado no replay: `poisson_v2` melhora o Poisson v1 de forma conclusiva
+(ΔBrier −0,0070 [−0,0092; −0,0048]) mas não bate o campeão (+0,0016 [+0,0005;
++0,0028]). Testes: `test_strength_v2_recovers_true_ratings_and_home_advantage`,
+`test_strength_v2_output_respects_neutral_venue_and_bounds`,
+`test_strength_v2_time_decay_never_sees_future_and_weights_recent`.
+
+## 1c. Força de seleções (`international-strength-v1`)
+
+O mesmo algoritmo do strength-v2 sobre `international_results`, com:
+
+- `tournament_type(nome)` ∈ FRIENDLY / QUALIFIER / TOURNAMENT / NATIONS_LEAGUE /
+  CONTINENTAL / OTHER, derivado do campo `tournament` do dataset;
+- peso **0,6** para amistosos (`FRIENDLY_WEIGHT`) — contam, mas menos;
+- campo neutro vindo da flag `neutral` do dataset (não inferido);
+- `MIN_TEAM_MATCHES = 8`: abaixo disso a previsão sai com nota de histórico
+  curto.
+
+Alimenta análises de seleções no pipeline; no replay de seleções (N 15.956,
+2010 →, janelas de 90 d) o consenso campeão tem Brier 0,5175 vs 0,6336 do
+ingênuo (+18,3 %, 66/66 janelas) e 0,5351 do ELO (+3,3 %); por tipo de
+torneio, o lift vai de +12,2 % (CONTINENTAL) a +24,9 % (QUALIFIER). Como não
+há odds históricas de seleções, **toda** seleção de seleções fica `MODEL_ONLY`.
 
 ## 2. ELO (`elo-v1`)
 
@@ -136,6 +202,19 @@ participa do veto** `MODEL_DISAGREEMENT`: a divergência máxima é medida só
 entre modelos relevantes. Exemplo real (INTL, seleções): Poisson 3,6 %,
 Dixon-Coles 56,3 %, Bivariate 40,1 % — o Poisson de força (média simples de
 ataque/defesa, sem ajuste por adversário) é claramente pior nesse dataset.
+
+### Campeão e challenger
+
+Há dois consensos: `ensemble` (v1: Poisson + Dixon-Coles + Bivariate) e
+`ensemble_v2` (v1 + `poisson_v2`). O que decide em produção é o **campeão**
+(`model_registry.parameters.champion_consensus`, hoje `ensemble`); o outro roda
+em paralelo em toda análise (Model Comparison) e em todo replay. A troca segue
+a regra de promoção de [`MODEL_GOVERNANCE.md`](MODEL_GOVERNANCE.md) — Brier OOS
+melhor com IC pareado < 0, LogLoss não pior, ECE ±0,005, N ≥ 300, melhor em
+≥ 60 % das janelas; ROI **não** é critério — e é uma ação explícita do
+operador. Estado atual: `ensemble_v2` é marginalmente melhor (Δ −0,0004
+[−0,0007; −0,0001]) mas só em 53 % das janelas → **PROMISING · UNSTABLE**, não
+promovido.
 
 ## 4d. Calibração (`calibration-isotonic-v1`)
 
@@ -314,20 +393,95 @@ Os limiares são editáveis em Configurações, mas `HARD_FLOORS` / `HARD_CEILIN
 além dos pisos/tetos (teste `test_settings_floors_block_threshold_hunting`) e o
 sistema **nunca** relaxa um limiar sozinho, mesmo com o Radar vazio.
 
-## 12c. Rótulos e evidência
+## 12c. Rótulos, estados e evidência
 
-- **HIGH PROBABILITY** — probabilidade do modelo ≥ `high_probability_min`
-  (padrão 65 %). Fala de probabilidade, não de valor ("seguro" ≠ "vale").
-- **VALUE** — edge ≥ `min_edge_pp` e EV ≥ `min_ev_pct`. Fala de edge, não de
-  probabilidade.
-- **HIGH PROBABILITY + VALUE** — as duas condições. São rótulos independentes.
+- **MODEL FAVORITE** (chave `HIGH_PROBABILITY`) — probabilidade do modelo ≥
+  `high_probability_min` (padrão 65 %). Fala de probabilidade, não de valor
+  ("seguro" ≠ "vale").
+- **VALUE** — passou edge/EV/gate **e** o mercado tem prova out-of-sample
+  (§12e). **VALUE CANDIDATE** — passou edge/EV/gate, falta a prova.
+- **MODEL ONLY** — probabilidade sem preço válido para determinar valor.
+- **WATCH** — em observação (gate falhou, preço curto, OOS negativo…).
 - **Evidência** (por análise, a partir da competição): `SETTLED` (≥ 30 apostas
   liquidadas na competição, com ROI/CLV medidos) → `BACKTEST_ODDS` (dataset com
   odds históricas reais; o backtest modelo × mercado é possível) →
   `MODEL_ONLY` (só há evidência probabilística; nunca comparado com odds
-  reais). Seleções (international_results) são sempre `MODEL_ONLY`.
+  reais). Seleções (international_results) e ligas sem odds históricas (MLS)
+  são sempre `MODEL_ONLY`.
 
-## 13. Opportunity Score V2 (`opportunity-v2`)
+### 12d. Estados por seleção (`recommendations/engine.py`)
+
+| Estado | Quando | Texto na UI |
+|---|---|---|
+| `MODEL_ONLY` | competição com evidência `MODEL_ONLY` (mesmo havendo odd na Superbet) **ou** seleção sem preço | "Probabilidade calculada, mas sem preço de mercado válido para determinar valor." |
+| `MARKET_OBSERVED` | há preço, sem edge (`NO_EDGE`) | — |
+| `VALUE_CANDIDATE` | `RECOMMENDED` (edge, EV, gate) mas OOS do mercado `INSUFFICIENT` | "Passou no quality gate; falta prova out-of-sample suficiente neste mercado." |
+| `VALUE` | `RECOMMENDED` e OOS do mercado `PASS` | "Passou no quality gate e o mercado tem histórico out-of-sample suficiente." |
+| `OBSERVATION` | `WATCH` — gate falhou, `OOS_NEGATIVE`, ou `WATCHING_PRICE` | inclui "Probabilidade interessante, mas preço atual não oferece margem suficiente." quando é preço |
+| `NO_BET` | bloqueio de evento ou de seleção | WHY NOT |
+
+Regra §29: em competição `MODEL_ONLY` **todas** as seleções são `MODEL_ONLY`,
+nunca VALUE, VALUE_CANDIDATE ou WATCHING_PRICE — edge sobre odd nunca
+validada é hipótese, não valor. Invariante verificado em
+`test_recommendations.py`.
+
+### 12e. OOS check (`oos_check`)
+
+`VALUE` exige, para o **mercado** da seleção, `n ≥ value_min_oos_bets` (100)
+apostas out-of-sample — apostas simuladas do campeão no último replay e/ou
+apostas reais liquidadas — com veredito **não** `NEGATIVE`. `INSUFFICIENT` →
+`VALUE_CANDIDATE`; `NEGATIVE` → `OBSERVATION · OOS_NEGATIVE`. Hoje 1X2 e OU 2,5
+têm OOS **NEGATIVE** (ROI −12,6 % e −7,6 %, conclusivos) e os demais mercados
+`INSUFFICIENT`, portanto nenhuma seleção pode ser `VALUE`.
+
+### 12f. Price target (`recommendations/pricing.py`)
+
+```
+break_even_odd     = 1 / p                                  (EV = 0)
+odd_ev             = (1 + min_ev_pct/100) / p               (EV mínimo)
+odd_edge           = 1 / ((p − min_edge_pp/100) · S)        (edge mínimo; S = soma das implícitas do mercado, i.e. a margem que a odd carrega)
+min_acceptable_odd = max(odd_ev, odd_edge)                  (`min_odd_reason` diz qual venceu)
+price_gap_pct      = odd_atual / min_acceptable_odd − 1     (negativo = preço curto)
+edge_sensitivity   = edge e EV com p ± 3 pp;  edge_survives_minus = ambos ainda ≥ limiares com p − 3 pp
+```
+
+`WATCHING_PRICE` (watchlist) só quando a odd-alvo está dentro de
+`[min_odd, max_odd]` e o gap ≤ 12 %. Quando a odd atual atinge
+`min_acceptable_odd` de uma seleção que estava em watchlist, o job de alertas
+emite `OPPORTUNITY_APPEARED` com `trigger = price_target`.
+
+### 12g. Clusters e exposição (`recommendations/correlation.py`)
+
+Cada seleção recebe `cluster_id` (17 clusters — `HOME_TEAM_POSITIVE`,
+`AWAY_TEAM_POSITIVE`, `DRAW`, `NO_DRAW`, `GOALS_HIGH/LOW`,
+`HOME/AWAY_GOALS_HIGH/LOW`, `CORNERS_*`, `CARDS_*`, `SHOTS_*`, `MISC`) e
+`thesis_group` (RESULT / GOALS / CORNERS / CARDS / SHOTS). Dentro de um
+cluster **uma** seleção é `PRIMARY` — melhor estado, depois status, depois
+mercado mais "puro" (`MARKET_PRIORITY`), depois maior Opportunity — e as
+demais são `ALTERNATIVA` (`primary_of`). Pares entre clusters correlacionados
+(`CROSS_CORRELATED`: mandante bem ⇄ mandante marca, poucos gols ⇄ empate…)
+definem a **Exposição** do evento: `LOW` (≤ 1 tese acionável), `MEDIUM`,
+`HIGH` (teses acionáveis correlacionadas). Performance separa primárias de
+alternativas; o Radar conta "teses acionáveis", não seleções.
+
+### 12h. Extreme probability guard
+
+Probabilidade > 90 % exige menor amostra de time ≥ 30 jogos **e** ≥ 300
+previsões liquidadas no mercado. Falhando um critério, a confiança é
+multiplicada por 0,85; falhando os dois, por 0,70, e `EXTREME_PROBABILITY`
+entra nos motivos. A probabilidade **nunca é truncada**
+(`test_extreme_probability_penalizes_confidence_but_never_truncates`).
+
+## 13. Opportunity Score V3 (`opportunity-v3`)
+
+V3 = breakdown do V2 (abaixo) **mais ajustes explícitos**
+(`opportunity_adjustments`, listados no tooltip do score), sempre negativos:
+
+| Ajuste | Quando | Efeito |
+|---|---|---|
+| `model_only` | estado `MODEL_ONLY` | score → **0** (sem preço validado não há "oportunidade" a pontuar) |
+| `uncertainty_penalty` | `VALUE_CANDIDATE` (OOS insuficiente) | −5 pontos |
+| `correlation_penalty` | seleção `ALTERNATIVA` de um cluster | × 0,85 (mesma tese não é oportunidade extra) |
 
 ```
 score = 100 · Σ_k w_k · value_k        (Σ w_k = 1; pesos normalizados de Configurações)
@@ -371,6 +525,16 @@ Regras do Lab:
 Tudo isso é coberto por `tests/test_backtest_leakage.py`. Resultado real E0
 2025/26, 1X2, Dixon-Coles: 420 jogos, ROI −4,4 %, Brier 0,213, CLV −1,49 % —
 mostrado sem maquiagem.
+
+Desde a iteração 3 o Lab é complementado pelo **Historical Replay Engine**
+(`validation/replay.py`), que roda todos os modelos e cinco baselines em
+janelas walk-forward sobre 11 ligas, com bootstrap pareado e IC 95 %, e pela
+`TemporalFeatureStore` (`features/temporal.py`), que é o único caminho de
+leitura de histórico tanto em produção quanto no replay. Metodologia em
+[`VALIDATION.md`](VALIDATION.md); resultados em
+[`ITERATION_3_REPORT.md`](ITERATION_3_REPORT.md) — em resumo, o mercado bate
+todos os modelos em 1X2 e OU 2,5, e a simulação de apostas dá ROI −8,5 % a
+−10,6 % (conclusivo) para todos.
 
 ## 15. Múltiplas (`recommendations/multiples.py`)
 

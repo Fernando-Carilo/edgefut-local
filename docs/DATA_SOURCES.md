@@ -16,6 +16,11 @@ Princípios:
 7. Cada dataset tem um **nível de evidência**: com odds históricas reais o
    modelo pode ser confrontado com o mercado (`BACKTEST_ODDS`); sem odds só há
    evidência probabilística (`MODEL_ONLY`).
+8. Em competição `MODEL_ONLY`, **toda** seleção é `MODEL_ONLY` mesmo que a
+   Superbet ofereça odd: edge sobre um preço que nunca foi validado é hipótese,
+   não valor. Nunca vira VALUE, VALUE CANDIDATE ou watchlist de preço.
+9. Toda leitura de histórico passa pela `TemporalFeatureStore` com `as_of`:
+   nada posterior à data da análise (ou da janela de replay) é lido.
 
 ## 1. Superbet (odds e eventos) — `providers/superbet`
 
@@ -98,8 +103,9 @@ Odds com `status != active` são descartadas.
 | Campos usados | Date, HomeTeam, AwayTeam, FTHG, FTAG, HTHG, HTAG, HS, AS, HST, AST, HC, AC, HY, AY, HR, AR, HF, AF, Referee, B365H/D/A, Avg>2.5, Avg<2.5, PSCH/PSCD/PSCA (closing) |
 | Frequência | diário |
 | Frescor | `history`/`stats`: FRESH ≤ 36 h · AGING ≤ 4 d · STALE ≤ 12 d · depois EXPIRED |
-| Evidência | **`BACKTEST_ODDS`** — traz odds pré-fechamento e de fechamento reais, então o modelo pode ser confrontado com o mercado (Lab, CLV) |
-| Uso | força das equipes, Poisson/Dixon-Coles/Bivariate, corners, cards, shots, ELO de clubes, **backtest com odds reais de fechamento**, pesos do ensemble por competição |
+| Evidência | **`BACKTEST_ODDS`** — traz odds pré-fechamento e de fechamento reais, então o modelo pode ser confrontado com o mercado (Lab, CLV, **Historical Replay**) |
+| Uso | força das equipes (v1 e **v2 opponent-adjusted**), Poisson/Dixon-Coles/Bivariate, corners, cards, shots, ELO de clubes, **backtest e replay com odds reais**, pesos do ensemble por competição, walk-forward do half-life |
+| Como baseline de mercado | as odds médias pré-jogo (`odds_h/d/a`, `odds_o25/u25`) com margem removida são o baseline **A · mercado** do replay. É um **proxy**: não são odds da Superbet. Resultado 2022–2026, 11 ligas: o mercado bate todos os modelos em 1X2 e OU 2,5 (ver `ITERATION_3_REPORT.md`) |
 
 Formato "new" (`https://www.football-data.co.uk/new/{country}.csv` — BRA, ARG,
 MEX, USA, …) contém apenas placar e odds; usado para gols/1X2, sem corners/cards.
@@ -136,8 +142,9 @@ MEX, USA, …) contém apenas placar e odds; usado para gols/1X2, sem corners/ca
 | Cobertura | todos os jogos de seleções masculinas desde 1872 |
 | Uso | ELO de seleções, forma, H2H, **detecção de campo neutro**, settlement de resultados |
 | Frescor | mesma política de `history`; `results` (para liquidação): FRESH ≤ 6 h · AGING ≤ 1 d · STALE ≤ 3 d |
-| Evidência | **`MODEL_ONLY`** — não há odds históricas; o modelo nunca foi confrontado com o mercado nesse dataset. Todo jogo de seleções carrega esse rótulo até existirem ≥ 30 previsões liquidadas na competição (`SETTLED`) |
-| Limitações | sem escanteios, cartões ou finalizações → mercados de corners/cards/shots ficam `LOW_DATA` para seleções |
+| Evidência | **`MODEL_ONLY`** — não há odds históricas; o modelo nunca foi confrontado com o mercado nesse dataset. Todo jogo de seleções carrega esse rótulo (e todas as suas seleções ficam no estado `MODEL_ONLY`) até existirem ≥ 30 previsões liquidadas na competição (`SETTLED`) |
+| Tipo de torneio | `tournament_type(tournament)` → FRIENDLY / QUALIFIER / TOURNAMENT / NATIONS_LEAGUE / CONTINENTAL / OTHER; amistosos pesam 0,6 no `international-strength-v1`; o replay de seleções reporta Brier por tipo (N 15.956 desde 2010; lift vs ingênuo de +12 % a +25 %) |
+| Limitações | sem escanteios, cartões ou finalizações → mercados de corners/cards/shots ficam `LOW_DATA` para seleções; sem odds → nunca há VALUE em seleções até o shadow mode acumular preço da Superbet liquidado |
 
 ### Conflitos entre fontes — `quality/conflicts.py`
 
@@ -204,6 +211,16 @@ propriedade `available` é `False`. Enquanto for `False`, todo mercado de jogado
 recebe `NO BET · LINEUP_UNCERTAINTY` e a UI mostra **PLAYER DATA UNAVAILABLE**.
 Um provider real pode ser plugado sem mexer no pipeline; o Diagnóstico lista o
 componente "Jogadores / escalações" como indisponível por design.
+
+## 6a. Coverage Map (`GET /validation/coverage`, Validação → Coverage Map)
+
+Por dataset: competição(ões) Superbet mapeadas, N de partidas, primeira e
+última data, % com resultado, % com odds, % com finalizações, escanteios,
+cartões, % com dados de jogadores (sempre 0 — sem fonte permitida), qualidade
+da amostra (INSUFFICIENT / EARLY / MODERATE / STRONG) e **`value_capable`**
+(só datasets com odds históricas podem, em princípio, gerar VALUE). Hoje: 11
+ligas europeias `value_capable` (E0, SP1, F1, N1, D1, SC0, I1, P1, B1, T1
+STRONG; SP2 MODERATE), USA/MLS e INTL sem odds → nunca VALUE.
 
 ## 6b. Fontes V2 — o que a tela "Fontes" mostra
 

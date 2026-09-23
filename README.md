@@ -20,14 +20,15 @@ PROBABILIDADE → ODD JUSTA → COMPARAÇÃO SUPERBET → EDGE → RISCO → REC
 | **Normalização** | Nomes PT→EN (países e clubes), mapeamento torneio→dataset, detecção **MANDANTE / VISITANTE / CAMPO NEUTRO** (não assume que o primeiro time listado é mandante) |
 | **Features** | Força com janelas 5/10/20 e peso de recência; splits geral/casa/fora; ataque/defesa relativos; H2H com peso menor que a forma |
 | **Qualidade** | Frescor por insumo (**FRESH / AGING / STALE / EXPIRED** — EXPIRED nunca é usado em silêncio → `NO BET · STALE_DATA`), **Source Conflict Engine** (divergências entre fontes registradas, resolvidas por regra e clicáveis), `CanonicalEventResolver`, Health Dashboard (Sistema → Diagnóstico) |
-| **Modelos** | `elo-v1`, `goals-poisson-v1`, `goals-dixon-coles-v1` (decaimento temporal), `goals-bivariate-poisson-v1` (correlação entre gols), `ensemble-v1` (pesos por competição derivados de walk-forward, nunca fixos à mão), `mc-v1` (10k–100k simulações, seed = eventId), `corners-v1`, `cards-v1`, `shots-v1`; `calibration-isotonic-v1` só ativa com ≥ 300 amostras liquidadas |
+| **Modelos** | `elo-v1`, `goals-poisson-v1`, `goals-dixon-coles-v1` (decaimento temporal), `goals-bivariate-poisson-v1` (correlação entre gols), `ensemble-v1` (**campeão**; pesos por competição derivados de walk-forward, nunca fixos à mão), `mc-v1` (10k–100k simulações, seed = eventId), `corners-v1`, `cards-v1`, `shots-v1`; `calibration-isotonic-v1` só ativa com ≥ 300 amostras liquidadas. **Challengers** (rodam em paralelo, não decidem): `strength-v2` opponent-adjusted + `goals-poisson-v2` (half-life escolhido por walk-forward: 365 d), `international-strength-v1` (seleções, tipo de torneio), `ensemble_v2` |
 | **Odds** | Probabilidade implícita, remoção de margem **Shin** e multiplicativa (ambas armazenadas, método configurável), abertura × atual com probabilidade implícita ("1,72 → 1,54 −10,5 % · 58,1 % → 64,9 %"), closing line usada **só para CLV** |
-| **Decisão** | Edge (pp), EV, **EDGEFUT CONFIDENCE 0–100** com breakdown em 6 grupos, **Opportunity Score V2** 0–100 (9 componentes configuráveis, nunca a odd), **Quality Gate** para TOP OPORTUNIDADES, rótulos **HIGH PROBABILITY ≠ VALUE**, **WHY THIS BET / WHY NOT**, **NO BET** com 11 motivos. Limiares nunca são reduzidos automaticamente |
-| **Avaliação** | `prediction_snapshot` imutável (correções em tabela separada) gravado antes do jogo e liquidado depois; Backtest Lab walk-forward **anti-leakage** (`as_of`); Hit rate, Brier, Log loss, ROI, Yield, Drawdown, CLV por mercado/competição com `INSUFFICIENT SAMPLE`; diagrama de confiabilidade RAW vs CALIBRATED; nível de evidência por análise (`MODEL_ONLY` / `BACKTEST_ODDS` / `SETTLED`) |
+| **Decisão** | Edge (pp), EV, **EDGEFUT CONFIDENCE 0–100** com breakdown em 6 grupos, **Opportunity Score V3** 0–100 (9 componentes configuráveis + ajustes explícitos, nunca a odd), **Quality Gate** para TOP OPORTUNIDADES, **estados** `MODEL_ONLY` → `MARKET_OBSERVED` → `VALUE_CANDIDATE` → `VALUE` / `OBSERVATION` / `NO_BET` (VALUE exige prova out-of-sample no mercado), rótulos **MODEL FAVORITE ≠ VALUE**, **clusters** (uma primária por tese, alternativas marcadas, exposição por evento), **price target** (break-even, odd mínima aceitável, sensibilidade do edge, watchlist), **WHY THIS BET / WHY NOT / WHY MODEL CHANGED**, **NO BET** com 12 motivos. Limiares nunca são reduzidos automaticamente |
+| **Avaliação** | `prediction_snapshot` imutável (correções em tabela separada) gravado antes do jogo e liquidado depois; `TemporalFeatureStore` (`as_of` em toda leitura, `LeakageError` se vazar); Backtest Lab e **Historical Replay** walk-forward com 5 baselines (mercado, ingênuo, Poisson simples, ELO, favorito), **bootstrap IC 95 %**, qualidade de amostra (INSUFFICIENT / EARLY / MODERATE / STRONG) e significância; **shadow mode** append-only com relatório diário; **reconciliação de settlement**; **drift monitor** (só alerta); Hit rate, Brier, Log loss, ROI, Yield, Drawdown, CLV por mercado/competição/cluster/estado; diagrama de confiabilidade RAW vs CALIBRATED; nível de evidência por análise (`MODEL_ONLY` / `BACKTEST_ODDS` / `SETTLED`) |
+| **Governança** | `model_registry` com papéis champion / challenger / baseline; **regra de promoção** explícita (Brier OOS com IC pareado, LogLoss, ECE, N ≥ 300, estabilidade ≥ 60 % das janelas; **ROI não é critério**); promoção é ação humana registrada, nunca automática; **MODEL HEALTH** discreto no Início |
 | **Ao Vivo** | Modo **observação**: placar, minuto e odds reais da Superbet (`offerState=live`), "Odds atualizadas há N s", **sem recomendações**; estatísticas que a fonte não expõe não são estimadas |
 | **Operação** | Scheduler V2 com histórico de execuções e correlation id (Sistema → Jobs), alertas locais, `model_registry`, cache de análise por versão de modelo, logs JSON estruturados |
 | **Explicação** | ExplanationEngine por templates + **Edge AI** (perguntas respondidas só com os números da análise); Ollama local opcional para reescrever |
-| **UI** | Início (resumo da manhã + **VER RADAR**), Radar V2, Jogos, Partida (com **Ver fontes**), Melhores Entradas, Ao Vivo, Múltiplas (com correlação), Backtest Lab, Histórico, Favoritos, Fontes V2, Modelos, Performance (Resultados · Calibração), Alertas, Sistema → Jobs, Sistema → Diagnóstico, Configurações |
+| **UI** | Início (resumo da manhã + **VER RADAR** + MODEL HEALTH), Radar V2 (cards por estado), Jogos, Partida (com **Ver fontes**, **Teses e exposição**, **Why model changed**, price target), Melhores Entradas, Ao Vivo, Múltiplas (com correlação), Backtest Lab, **Validação** (Model Validation · Model Comparison · Coverage Map · Shadow · Drift), Histórico, Favoritos, Fontes V2, Modelos, Performance (Resultados · Calibração · por cluster/estado), Alertas, Sistema → Jobs, Sistema → Diagnóstico, Configurações |
 
 Todo número na tela carrega `source, sourceUrl, collectedAt, confidence, sampleSize` e um status de frescor. Não há dados mock: o que não existe aparece como indisponível.
 
@@ -47,19 +48,20 @@ engine/                Python 3.12 · FastAPI · SQLAlchemy · DuckDB/Parquet ·
   edgefut/normalization times, países, competições, CanonicalEventResolver
   edgefut/domain       frescor (políticas por insumo), proveniência, conflitos entre fontes, tipos da análise
   edgefut/quality      Source Conflict Engine, Health (componentes do sistema)
-  edgefut/features     força, forma, H2H, local do jogo, qualidade dos dados
-  edgefut/models       ELO, Poisson, Dixon-Coles, Bivariate Poisson, ensemble, calibração isotônica, registry
+  edgefut/features     força, forma, H2H, local do jogo, qualidade dos dados, TemporalFeatureStore (as_of)
+  edgefut/models       ELO, Poisson, Dixon-Coles, Bivariate Poisson, ensemble (campeão/challenger), strength_v2, international_strength, calibração, registry
   edgefut/simulation   Monte Carlo
   edgefut/odds         implícita, margem (Shin/multiplicativa), movimento, closing line
-  edgefut/recommendations edge, confiança v2, Opportunity V2, Quality Gate, WHY/WHY NOT, NO BET, múltiplas
-  edgefut/backtesting  Lab (as_of), liquidação, métricas, performance por mercado/competição
+  edgefut/recommendations edge, confiança v2, Opportunity V3, Quality Gate, estados, pricing, clusters/correlação, WHY/WHY NOT, NO BET, múltiplas
+  edgefut/validation   replay (baselines), bootstrap, decay, shadow, drift, governance, model_health
+  edgefut/backtesting  Lab (as_of), liquidação, reconciliação, métricas, performance por mercado/competição/cluster/estado
   edgefut/alerts       alertas locais
   edgefut/scheduler    jobs APScheduler com job_run + correlation id
   edgefut/db           SQLAlchemy, migrações, guarda de imutabilidade de snapshots
   edgefut/explanations templates, Edge AI, Ollama
   tests/               pytest (regressão + invariantes matemáticas + anti-leakage)
 data/                  raw · processed (Parquet) · cache · sqlite (ignorado no git)
-docs/                  ARCHITECTURE · DATA_SOURCES · MODELS · ROADMAP · ITERATION_2_BASELINE · ITERATION_2_REPORT
+docs/                  ARCHITECTURE · DATA_SOURCES · MODELS · VALIDATION · MODEL_GOVERNANCE · ROADMAP · ITERATION_{2,3}_BASELINE · ITERATION_{2,3}_REPORT
 scripts/               dev.ps1 · install.ps1 · build-windows.ps1 · dev.sh
 ```
 
@@ -123,7 +125,8 @@ uv venv .venv --python 3.12 && uv pip install -e ".[dev]" --python .venv/bin/pyt
 Principais rotas: `GET /health`, `GET /events?window=48h`, `GET /events/{id}/analysis?simulations=50000`,
 `GET /radar`, `GET /entries`, `GET /dashboard`, `POST /chat`, `POST /multiples/evaluate`, `POST /simulator`,
 `POST /bankroll/stake`, `POST /backtest`, `GET /performance`, `GET /calibration`, `GET /history`, `GET /sources`, `GET /models`, `GET|PUT /settings`,
-`GET /live`, `GET /events/{id}/conflicts`, `GET /events/{id}/odds/history`, `GET /health/system`, `GET /jobs`, `POST /jobs/{job}/run`, `GET /alerts`.
+`GET /live`, `GET /events/{id}/conflicts`, `GET /events/{id}/odds/history`, `GET /health/system`, `GET /jobs`, `POST /jobs/{job}/run`, `GET /alerts`,
+`POST|GET /validation/replay[/latest]`, `POST|GET /validation/decay[/latest]`, `GET /validation/shadow`, `GET /validation/drift`, `GET /validation/coverage`, `GET /validation/governance`, `POST /validation/governance/promote`, `GET /validation/runs`.
 
 Configuração por variáveis `EDGEFUT_*` (ver `engine/edgefut/core/config.py`). O host é fixo em loopback e não pode ser alterado.
 
@@ -138,14 +141,17 @@ Configuração por variáveis `EDGEFUT_*` (ver `engine/edgefut/core/config.py`).
 - **Edge** = probabilidade do modelo − probabilidade justa do mercado (em pontos percentuais). **EV** = prob × odd − 1. A probabilidade justa vem da remoção de margem (Shin ou multiplicativa; as duas ficam gravadas).
 - **RAW vs CALIBRATED** — a probabilidade calibrada só existe quando o calibrador da competição/mercado tem ≥ 300 amostras liquidadas; até lá a tela diz explicitamente que está usando RAW.
 - **EDGEFUT CONFIDENCE 0–100** — grupos `DATA_QUALITY`, `HISTORICAL_SAMPLE`, `MODEL_AGREEMENT`, `CALIBRATION`, `FRESHNESS`, `CONTEXT`; clique para ver cada componente. Grau A/B/C/D deriva do score: só A e B entram no Radar; C fica em observação; D nunca é recomendado.
-- **HIGH PROBABILITY ≠ VALUE** — um mercado pode ter alta probabilidade sem ter edge (SAFE) e vice-versa. Os rótulos são independentes e cada card mostra o seu.
-- **Opportunity Score V2** — 20 % confiança do modelo, 15 % qualidade dos dados, 10 % qualidade da calibração, 15 % edge, 10 % EV, 10 % frescor das odds, 10 % concordância entre modelos, 5 % performance histórica, 5 % tamanho da amostra. Pesos editáveis em Configurações; nunca a odd.
+- **MODEL FAVORITE ≠ VALUE** — um mercado pode ter alta probabilidade sem ter edge e vice-versa. Os rótulos são independentes e cada card mostra o seu.
+- **Estados** — `MODEL ONLY` ("Probabilidade calculada, mas sem preço de mercado válido para determinar valor." — inclui **todas** as seleções de competições sem odds históricas, como seleções e MLS, mesmo que a Superbet tenha odd), `VALUE CANDIDATE` (passou no gate, falta prova out-of-sample ≥ 100 apostas no mercado), `VALUE` (passou e o mercado tem prova não negativa), `WATCH`/`OBSERVATION` (gate falhou, OOS negativo, ou preço curto: "Probabilidade interessante, mas preço atual não oferece margem suficiente."), `NO BET`.
+- **Teses e exposição** — seleções da mesma tese (ex.: 1, 1X, DNB casa) formam um cluster com **uma** primária; as outras são `ALTERNATIVA`. A exposição do evento (LOW / MEDIUM / HIGH) avisa quando teses acionáveis são correlacionadas.
+- **Price target** — break-even (1/p), odd mínima aceitável (satisfaz edge e EV mínimos), gap de preço, e se o edge sobrevive a −3 pp de probabilidade.
+- **Opportunity Score V3** — 20 % confiança do modelo, 15 % qualidade dos dados, 10 % qualidade da calibração, 15 % edge, 10 % EV, 10 % frescor das odds, 10 % concordância entre modelos, 5 % performance histórica, 5 % tamanho da amostra; depois ajustes explícitos (MODEL ONLY → 0; VALUE CANDIDATE −5; alternativa × 0,85), visíveis no tooltip. Pesos editáveis em Configurações; nunca a odd.
 - **Quality Gate** — para entrar em TOP OPORTUNIDADES a recomendação passa por 10 checks (qualidade ≥ 60 %, confiança ≥ 65, amostra ≥ 15 jogos, divergência ≤ 10 pp, edge plausível ≤ 15 pp sem calibrador, frescor, odds completas…). Os limiares são editáveis mas têm **pisos e tetos rígidos** e o sistema nunca os reduz sozinho ("não caçar entradas").
 - **WHY THIS BET / WHY NOT** — motivos em texto, gerados só a partir dos números da análise, sem linguagem de garantia.
 - **Evidência** — `MODEL_ONLY` (só modelo), `BACKTEST_ODDS` (competição com backtest sobre odds reais) ou `SETTLED` (previsões desta competição já liquidadas). Aparece em todo card.
 - **Ver fontes** — origem, URL, data de coleta, confiança e amostra de cada estatística, mais os checks de qualidade e os componentes da confiança.
 
-Motivos de NO BET: `LOW_DATA`, `LOW_CONFIDENCE`, `NO_EDGE`, `MODEL_DISAGREEMENT`, `UNRELIABLE_SOURCE`, `SMALL_SAMPLE`, `LINEUP_UNCERTAINTY`, `EXTREME_ODDS_MOVEMENT`, `UNSUPPORTED_COMPETITION`, `STALE_DATA`, `QUALITY_GATE`.
+Motivos de NO BET / WATCH: `LOW_DATA`, `LOW_CONFIDENCE`, `NO_EDGE`, `MODEL_DISAGREEMENT`, `UNRELIABLE_SOURCE`, `SMALL_SAMPLE`, `LINEUP_UNCERTAINTY`, `EXTREME_ODDS_MOVEMENT`, `UNSUPPORTED_COMPETITION`, `STALE_DATA`, `QUALITY_GATE`, `MODEL_ONLY`, `OOS_NEGATIVE`, `WATCHING_PRICE`, `EXTREME_PROBABILITY` (probabilidade > 90 % sem amostra forte: penaliza a confiança, nunca trunca).
 
 ---
 
@@ -171,6 +177,29 @@ Motivos de NO BET: `LOW_DATA`, `LOW_CONFIDENCE`, `NO_EDGE`, `MODEL_DISAGREEMENT`
 
 Detalhes, limitações e riscos em [docs/ITERATION_2_REPORT.md](docs/ITERATION_2_REPORT.md).
 
+## Validação do modelo (iteração 3) — os números, sem maquiagem
+
+| Pergunta | Resposta medida |
+|---|---|
+| Replay clubes (11 ligas com odds, 2022-08 → 2026-09, 463 janelas de 30 d) | **N 14.393** partidas |
+| Brier 1X2 — campeão `ensemble` vs **mercado** | **0,5857 vs 0,5718 — o mercado é melhor.** ΔBrier +0,0147 [+0,0128; +0,0166], lift −2,56 %, melhor em 122/463 janelas → `NO CLEAR ADVANTAGE`. O mercado vence em 11/11 ligas |
+| Brier 1X2 — campeão vs **ingênuo** (frequência da liga) | 0,5857 vs 0,6480 — lift +9,63 %, 412/463 janelas → `CONSISTENT` |
+| Over/Under 2,5 | mercado 0,2389 vs ensemble 0,2452 — mercado melhor |
+| Apostas simuladas (gate simplificado) | 1X2: ROI **−12,6 %** [−15,7; −9,2] N 7.939 · OU 2,5: **−7,6 %** [−9,9; −5,2] N 7.271 · CLV −3,5 % — `NEGATIVE` para todos os 6 modelos |
+| Challengers | `ensemble_v2` Δ −0,0004 [−0,0007; −0,0001] mas só 53 % das janelas → `PROMISING · UNSTABLE`; `poisson_v2` → `KEEP CHAMPION`. **Nenhuma promoção** |
+| Replay seleções (2010 →, 66 janelas de 90 d, **sem odds**) | **N 15.956**; Brier 0,5175 vs 0,6336 do ingênuo (+18,3 %, 66/66 janelas) e 0,5351 do ELO (+3,3 %) → `CONSISTENT`; por tipo de torneio lift +12 % (CONTINENTAL) a +25 % (QUALIFIER). Tudo `MODEL_ONLY` |
+| Leakage tests | **PASS** (TemporalFeatureStore, Lab, replay) |
+| Reconciliação de settlement | **PASS** — 117 liquidadas · 16 pendentes (< 72 h) · 0 erros · 0 divergências |
+| Shadow mode | mecanismo **PASS** (2.438 previsões append-only), evidência **INSUFFICIENT** (0 liquidadas ainda) |
+| Radar hoje (data FIFA + MLS) | 60 analisados · **0 VALUE · 0 VALUE CANDIDATE** · 47 eventos MODEL ONLY · 13 NO BET |
+
+Conclusão honesta: o EdgeFut sabe futebol (bate os baselines ingênuos com
+folga), mas **não sabe mais do que a odd média pré-jogo** — por isso hoje ele
+não recomenda VALUE em nenhum mercado, e diz isso na tela (MODEL HEALTH:
+`WATCH`). Metodologia em [docs/VALIDATION.md](docs/VALIDATION.md), regras de
+promoção em [docs/MODEL_GOVERNANCE.md](docs/MODEL_GOVERNANCE.md), relatório
+completo em [docs/ITERATION_3_REPORT.md](docs/ITERATION_3_REPORT.md).
+
 ---
 
 ## Segurança e ética
@@ -188,9 +217,13 @@ Detalhes, limitações e riscos em [docs/ITERATION_2_REPORT.md](docs/ITERATION_2
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — pipeline, módulos, contratos, segurança
 - [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) — fontes, endpoints, mapeamento de mercados e competições
 - [docs/MODELS.md](docs/MODELS.md) — fórmulas, parâmetros e versões dos modelos
+- [docs/VALIDATION.md](docs/VALIDATION.md) — replay, baselines, bootstrap, qualidade de amostra, shadow, reconciliação, drift
+- [docs/MODEL_GOVERNANCE.md](docs/MODEL_GOVERNANCE.md) — champion/challenger, regra de promoção, o que nunca muda sozinho
 - [docs/ROADMAP.md](docs/ROADMAP.md) — fases, estado e próximos passos
 - [docs/ITERATION_2_BASELINE.md](docs/ITERATION_2_BASELINE.md) — auditoria do estado real antes da iteração 2 (o que estava quebrado)
 - [docs/ITERATION_2_REPORT.md](docs/ITERATION_2_REPORT.md) — o que foi implementado, verificado com dados reais, limitações e riscos
+- [docs/ITERATION_3_BASELINE.md](docs/ITERATION_3_BASELINE.md) — auditoria antes da iteração 3
+- [docs/ITERATION_3_REPORT.md](docs/ITERATION_3_REPORT.md) — validação do modelo com números reais, limitações e riscos
 
 ## Licença
 
