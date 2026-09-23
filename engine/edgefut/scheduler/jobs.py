@@ -60,12 +60,16 @@ def job_sync_odds(hours: int = 48, limit: int = 60) -> dict:
                 select(Event.id).where(Event.kickoff_utc > now - timedelta(hours=2), Event.kickoff_utc < now + timedelta(hours=hours))
                 .order_by(Event.kickoff_utc.asc()).limit(limit)
             ).scalars().all()
-            sync = SuperbetSync()
-            for eid in ids:
+            s.commit()
+        sync = SuperbetSync()
+        for eid in ids:
+            # Uma transação curta por evento: o fetch HTTP acontece fora de qualquer
+            # escrita pendente, evitando manter o SQLite bloqueado por minutos.
+            with session_scope() as s:
                 r = sync.sync_odds(s, eid)
-                if r.get("blocked"):
-                    break
-                n += 1
+            if r.get("blocked"):
+                break
+            n += 1
         _state["last_odds_sync"] = datetime.utcnow()
         return {"ok": True, "events": n}
     except Exception as exc:  # noqa: BLE001

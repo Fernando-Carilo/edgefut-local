@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from ..collectors import install_source_log_sink
+from ..collectors import flush_source_log, install_source_log_sink
 from ..core import versions
 from ..core.config import settings
 from ..core.logging import setup_logging
@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         jobs.stop()
+        flush_source_log()
 
 
 def create_app() -> FastAPI:

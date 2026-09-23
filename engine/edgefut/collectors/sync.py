@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
+import time
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -17,17 +20,61 @@ from ..providers.superbet import SuperbetEvent, SuperbetProvider
 log = logging.getLogger(__name__)
 
 
+_log_queue: queue.Queue | None = None
+_log_writer: threading.Thread | None = None
+
+
+def _drain_source_log(q: queue.Queue) -> None:
+    """Escreve entradas de source_log em lotes, fora da thread que fez o fetch.
+
+    Um fetch pode acontecer enquanto a sessão da thread chamadora mantém uma transação
+    de escrita aberta; escrever o log de forma síncrona por outra conexão bloquearia
+    até o busy_timeout (auto-deadlock no SQLite). Por isso o sink apenas enfileira.
+    """
+    while True:
+        batch = [q.get()]
+        try:
+            while len(batch) < 100:
+                batch.append(q.get_nowait())
+        except queue.Empty:
+            pass
+        try:
+            with session_scope() as s:
+                s.add_all(batch)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("source_log: falha ao gravar %d entradas: %s", len(batch), exc)
+        finally:
+            for _ in batch:
+                q.task_done()
+
+
 def install_source_log_sink() -> None:
+    global _log_queue, _log_writer
+    if _log_queue is None:
+        _log_queue = queue.Queue(maxsize=5000)
+        _log_writer = threading.Thread(target=_drain_source_log, args=(_log_queue,), name="source-log-writer", daemon=True)
+        _log_writer.start()
+
     def sink(provider, url, status, http_status, latency_ms, error):
-        with session_scope() as s:
-            s.add(
-                SourceLog(
-                    provider=provider, url=url[:400], status=status, http_status=http_status,
-                    latency_ms=latency_ms, error=error,
-                )
-            )
+        entry = SourceLog(
+            provider=provider, url=url[:400], status=status, http_status=http_status,
+            latency_ms=latency_ms, error=error,
+        )
+        try:
+            _log_queue.put_nowait(entry)
+        except queue.Full:
+            log.debug("source_log: fila cheia, entrada descartada (%s)", url[:80])
 
     get_http_client().set_log_sink(sink)
+
+
+def flush_source_log(timeout: float = 5.0) -> None:
+    """Aguarda a fila de logs esvaziar (usado em testes e no shutdown)."""
+    if _log_queue is None:
+        return
+    deadline = time.monotonic() + timeout
+    while not _log_queue.empty() and time.monotonic() < deadline:
+        time.sleep(0.05)
 
 
 class SuperbetSync:

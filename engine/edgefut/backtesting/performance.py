@@ -29,6 +29,7 @@ def settle_pending(session: Session, max_events: int = 40) -> dict:
     store = get_store()
     settled = 0
     for ev in pending:
+        # Fetch antes de qualquer escrita; commit por evento mantém a transação curta.
         result = _result_from_superbet(provider, ev) or _result_from_history(store, ev, session)
         if result is None:
             continue
@@ -45,7 +46,7 @@ def settle_pending(session: Session, max_events: int = 40) -> dict:
             s.result = {"hg": result.hg, "ag": result.ag, "corners": result.corners, "cards": result.cards, "source": result.source, "outcomes": outcomes}
             s.settled_at = datetime.utcnow()
         settled += 1
-    session.flush()
+        session.commit()
     return {"checked": len(pending), "settled": settled}
 
 
