@@ -66,8 +66,14 @@ def cached_analysis(event_id: int) -> MatchAnalysis | None:
 
 
 def all_cached() -> list[MatchAnalysis]:
+    """Última análise conhecida de cada evento futuro (o radar as substitui a cada ciclo).
+
+    Não expira por TTL: melhor mostrar uma análise de 30 min atrás, com carimbo de
+    tempo, do que uma tela vazia enquanto o próximo ciclo roda.
+    """
+    now = datetime.utcnow()
     with _cache_lock:
-        return [a for ts, a in _cache.values() if datetime.utcnow() - ts < CACHE_TTL * 6]
+        return [a for _, a in _cache.values() if a.event.kickoff_utc > now - timedelta(hours=2)]
 
 
 def invalidate_cache() -> None:
