@@ -87,6 +87,13 @@ No primeiro boot o app cria o banco, baixa os datasets públicos, valida a Super
 
 O usuário final não precisa de terminal: o instalador traz o engine embutido e o app abre pronto.
 
+### 4. Download sem compilar (GitHub Actions)
+
+O workflow [`build-windows.yml`](.github/workflows/build-windows.yml) roda os mesmos passos num runner Windows a cada push e publica o instalador:
+
+- como **artifact** `EdgeFutAI-Setup` do run (aba *Actions*);
+- como asset da pré-release **`dev-latest`** em [Releases](https://github.com/Fernando-Carilo/edgefut-local/releases/tag/dev-latest) (pushes em `main`/`cursor/**`), ou de uma release `vX.Y.Z` ao publicar uma tag.
+
 ### Linux/macOS (só desenvolvimento)
 
 ```bash
