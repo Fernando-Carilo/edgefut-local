@@ -8,6 +8,14 @@ Princípios:
    `confidence`, `sampleSize`.
 4. Se uma fonte bloquear automação, registramos a indisponibilidade e seguimos
    com outra fonte ou importação manual. Não contornamos proteções.
+5. Todo insumo tem um **status de frescor** (FRESH / AGING / STALE / EXPIRED)
+   calculado pela política do seu tipo (`domain/freshness.py`). Um insumo
+   EXPIRED nunca alimenta uma recomendação em silêncio.
+6. Quando duas fontes discordam sobre o mesmo jogo, a divergência é gravada
+   (`source_conflict`) com a regra que a resolveu, e fica visível na UI.
+7. Cada dataset tem um **nível de evidência**: com odds históricas reais o
+   modelo pode ser confrontado com o mercado (`BACKTEST_ODDS`); sem odds só há
+   evidência probabilística (`MODEL_ONLY`).
 
 ## 1. Superbet (odds e eventos) — `providers/superbet`
 
@@ -16,17 +24,44 @@ Princípios:
 | Tipo | API pública JSON de oferta (a mesma consumida pelo site) |
 | Base | `https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR` |
 | Eventos por data | `GET /events/by-date?offerState=prematch&startDate=…&endDate=…&sportId=5` |
+| Eventos em andamento | `GET /events/by-date?offerState=live&…` (só `metadata.status == "STARTED"`) |
 | Evento completo (odds) | `GET /events/{eventId}` |
 | Estrutura competições | `GET /sport/5/tournaments` |
 | Autenticação | nenhuma |
-| Frequência | eventos: 15 min · odds (jogos < 48h): 5 min |
-| Cache TTL | eventos 10 min · odds 4 min · torneios 24h |
+| Frequência | eventos: 15 min · odds (jogos < 48h): 5 min · ao vivo: `live_poll_seconds` (mín. 20 s) · closing line: 10 min |
+| Cache TTL | eventos 10 min · odds 4 min · torneios 24h · ao vivo `poll − 5 s` |
+| Frescor | `odds`: FRESH ≤ 10 min · AGING ≤ 45 min · STALE ≤ 6 h · depois EXPIRED. `odds_live`: 45 s / 2 min / 10 min. `events`: 20 min / 1 h / 6 h |
+| Evidência | eventos e odds atuais são reais; **não** há odds históricas da Superbet além dos snapshots que o próprio app grava |
 | Link externo | `https://superbet.bet.br/apostas/futebol/…/{eventId}` (deep link best-effort) |
 
 A página HTML da Superbet é protegida por Cloudflare (403 para clientes não
 navegador). **Não** fazemos scraping da página nem usamos Playwright contra a
 Superbet. Se o endpoint JSON passar a responder 403/429, o provider registra
 `SUPERBET_UNAVAILABLE` e o app opera com os últimos dados em SQLite.
+
+Cada `odds_snapshot` guarda o preço bruto; a análise calcula as probabilidades
+justas pelos dois métodos (Shin e multiplicativa) e grava ambas em cada seleção. A closing line é a última odd observada antes
+do kickoff (`closing_line`) e serve só para CLV.
+
+### Ao vivo (modo observação) — `collectors/live.py`
+
+O mesmo endpoint, com `offerState=live`, lista os jogos em andamento. O coletor
+`live_poll` roda a cada `live_poll_seconds`, com backoff exponencial até 600 s
+quando a fonte falha e respeito ao circuit breaker. Do payload usamos apenas o
+que a fonte expõe:
+
+| Campo | Origem no payload | Quando ausente |
+|---|---|---|
+| Placar | `metadata.homeTeamScore / awayTeamScore` | mostra "—" |
+| Minuto / período | `metadata.minutes`, `periodStatus`, `stoppageTime` | mostra só o status |
+| Escanteios / cartões | `metadata.homeTeamCorners…`, `…YellowCards`, `…RedCards` | **não** aparecem — nunca são estimados |
+| Odds ao vivo | `GET /events/{id}` do jogo acompanhado | movimento em relação ao poll anterior |
+
+A tela Ao Vivo exibe "Odds atualizadas há N s" (idade real desde `updated_at`)
+e um aviso **OBSERVATION ONLY**: nenhuma recomendação, edge ou probabilidade de
+modelo é calculada durante o jogo. O que é gravado no evento
+(`live_status`, `live_minute`, placar, `live_collected_at`) serve para
+liquidação e para o Diagnóstico — não para apostas.
 
 ### Mapeamento de mercados (marketId Superbet → mercado EdgeFut)
 
@@ -62,7 +97,9 @@ Odds com `status != active` são descartadas.
 | Cobertura | Inglaterra (E0–E3), Espanha (SP1, SP2), Itália (I1, I2), Alemanha (D1, D2), França (F1, F2), Holanda (N1), Portugal (P1), Bélgica (B1), Turquia (T1), Escócia (SC0), Grécia (G1) |
 | Campos usados | Date, HomeTeam, AwayTeam, FTHG, FTAG, HTHG, HTAG, HS, AS, HST, AST, HC, AC, HY, AY, HR, AR, HF, AF, Referee, B365H/D/A, Avg>2.5, Avg<2.5, PSCH/PSCD/PSCA (closing) |
 | Frequência | diário |
-| Uso | força das equipes, Poisson/Dixon-Coles, corners, cards, shots, ELO de clubes, **backtest com odds reais de fechamento** |
+| Frescor | `history`/`stats`: FRESH ≤ 36 h · AGING ≤ 4 d · STALE ≤ 12 d · depois EXPIRED |
+| Evidência | **`BACKTEST_ODDS`** — traz odds pré-fechamento e de fechamento reais, então o modelo pode ser confrontado com o mercado (Lab, CLV) |
+| Uso | força das equipes, Poisson/Dixon-Coles/Bivariate, corners, cards, shots, ELO de clubes, **backtest com odds reais de fechamento**, pesos do ensemble por competição |
 
 Formato "new" (`https://www.football-data.co.uk/new/{country}.csv` — BRA, ARG,
 MEX, USA, …) contém apenas placar e odds; usado para gols/1X2, sem corners/cards.
@@ -98,7 +135,31 @@ MEX, USA, …) contém apenas placar e odds; usado para gols/1X2, sem corners/ca
 | Campos | date, home_team, away_team, home_score, away_score, tournament, city, country, **neutral** |
 | Cobertura | todos os jogos de seleções masculinas desde 1872 |
 | Uso | ELO de seleções, forma, H2H, **detecção de campo neutro**, settlement de resultados |
+| Frescor | mesma política de `history`; `results` (para liquidação): FRESH ≤ 6 h · AGING ≤ 1 d · STALE ≤ 3 d |
+| Evidência | **`MODEL_ONLY`** — não há odds históricas; o modelo nunca foi confrontado com o mercado nesse dataset. Todo jogo de seleções carrega esse rótulo até existirem ≥ 30 previsões liquidadas na competição (`SETTLED`) |
 | Limitações | sem escanteios, cartões ou finalizações → mercados de corners/cards/shots ficam `LOW_DATA` para seleções |
+
+### Conflitos entre fontes — `quality/conflicts.py`
+
+O mesmo jogo pode aparecer na Superbet e num dataset histórico com horário,
+nomes, mando ou placar diferentes. O `CanonicalEventResolver` casa os dois pelo
+par de times canônicos + janela de horário, e o Source Conflict Engine grava
+cada divergência em `source_conflict` (campo, valor A, valor B, fonte
+vencedora, regra). Regras usadas:
+
+| Regra | Quando |
+|---|---|
+| `user_override` | o usuário definiu manualmente (ex.: mando) |
+| `dataset_flag` | flag explícita do dataset (ex.: `neutral` do international_results) |
+| `prefer_curated_history` | placar/resultado: o dataset curado prevalece sobre o feed da casa |
+| `prefer_superbet` | horário/odds: o feed da Superbet prevalece por ser mais recente |
+| `listing_kept_unconfirmed` | mando: a listagem é mantida, mas marcado `UNCONFIRMED` |
+| `tolerance_window` | diferença de horário dentro da tolerância |
+| `canonical_teams` | nomes distintos resolvidos por alias para o mesmo time |
+
+Na página do jogo aparece "N divergências de dados resolvidas"; clicar abre
+cada conflito com os dois valores e a regra aplicada. Nada é resolvido em
+silêncio.
 
 ## 4. Venue / campo neutro — `features/venue.py`
 
@@ -133,6 +194,32 @@ confiança dessa afirmação.
   passados; não inventamos árbitro para jogos futuros.
 - Escalações confirmadas — sem fonte; o aviso `LINEUP_UNCERTAINTY` é sempre
   exibido para mercados de jogador.
+
+### Player Engine — arquitetura pronta, sem provider (`providers/player/`)
+
+Existe apenas o contrato: `PlayerProvider` (abstrato), `PlayerStats`
+(por 90 min, observadas — nunca estimadas), `Availability`
+(`AVAILABLE / DOUBTFUL / INJURED / SUSPENDED / UNKNOWN`) e um registro cuja
+propriedade `available` é `False`. Enquanto for `False`, todo mercado de jogador
+recebe `NO BET · LINEUP_UNCERTAINTY` e a UI mostra **PLAYER DATA UNAVAILABLE**.
+Um provider real pode ser plugado sem mexer no pipeline; o Diagnóstico lista o
+componente "Jogadores / escalações" como indisponível por design.
+
+## 6b. Fontes V2 — o que a tela "Fontes" mostra
+
+Cada fonte tem um card gerado por `quality/health.py::source_cards`:
+
+- status (HEALTHY / DEGRADED / STALE / UNAVAILABLE) e frescor da última coleta;
+- `last_ok`, latência média, taxa de erro e requisições nas últimas 24 h (de
+  `source_log`);
+- **Fornece / Não fornece** — lista explícita do que a fonte entrega (ex.:
+  Superbet: eventos, odds por mercado, status, placar final; football-data:
+  resultados, finalizações, escanteios, cartões, odds B365) e do que não
+  entrega (ex.: international_results: escanteios, cartões, odds).
+
+Abaixo dos cards, a tabela de datasets traz, por competição, o tamanho, a
+última atualização e a coluna **Odds / evidência** (`BACKTEST_ODDS` ou
+`MODEL_ONLY`).
 
 ## 7. Cache e limites
 
