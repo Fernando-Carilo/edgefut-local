@@ -1,0 +1,172 @@
+import type { EventSummary, Recommendation } from "@edgefut/contracts";
+import { dayLabel, fmtTime, odd, pct } from "@edgefut/shared";
+import clsx from "clsx";
+import { Heart, Plus } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+
+import { useUi } from "@/store/ui";
+
+import { DemoChip, EdgeValue, EvidenceChip, GateChip, GradeBadge, LabelChip, NoBetChip, StateChip, StatusChip, VenueChip } from "./ui";
+
+export function EventRow({ event, onFavorite }: { event: EventSummary; onFavorite?: (id: number, on: boolean) => void }) {
+  const navigate = useNavigate();
+  const mo = event.main_odds;
+  return (
+    <div className="card card-hover flex items-center gap-4 px-4 py-3" onClick={() => navigate(`/jogos/${event.id}`)}>
+      <div className="w-16 shrink-0 text-center">
+        <div className="text-xs font-semibold text-ink-2">{dayLabel(event.kickoff_utc)}</div>
+        <div className="text-base font-bold tabular-nums">{fmtTime(event.kickoff_utc)}</div>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[11px] font-semibold uppercase tracking-wide text-ink-3">{event.competition_name}</div>
+        <div className="flex items-center gap-2 truncate text-[15px] font-semibold">
+          <span className="truncate">{event.home_name}</span>
+          <span className="text-ink-3">x</span>
+          <span className="truncate">{event.away_name}</span>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <VenueChip status={event.venue_status} compact />
+          {event.demo && <DemoChip />}
+          {event.no_bet_reason && <NoBetChip reason={event.no_bet_reason} />}
+          {event.best_market && !event.no_bet_reason && <span className="chip bg-success-50 text-success">{event.best_market}</span>}
+        </div>
+      </div>
+      <div className="hidden items-center gap-1.5 md:flex">
+        {mo ? (
+          (["HOME", "DRAW", "AWAY"] as const).map((k) => (
+            <span key={k} className="odd-pill" title={`${k === "HOME" ? "1" : k === "DRAW" ? "X" : "2"} · implícita ${pct(1 / mo[k])}`}>
+              {odd(mo[k])}
+            </span>
+          ))
+        ) : (
+          <span className="text-xs text-ink-3">{event.market_count} mercados</span>
+        )}
+      </div>
+      <div className="flex w-24 shrink-0 flex-col items-end gap-1">
+        {event.confidence_grade ? <GradeBadge grade={event.confidence_grade} /> : <span className="text-[11px] text-ink-3">{event.no_bet_reason ? "" : "não analisado"}</span>}
+        {event.opportunity_score !== null && event.opportunity_score !== undefined && (
+          <span className="text-[11px] text-ink-2">
+            Score <b className="tabular-nums">{Math.round(event.opportunity_score)}</b>
+          </span>
+        )}
+      </div>
+      {onFavorite && (
+        <button
+          className={clsx("btn-ghost", event.is_favorite && "text-primary")}
+          onClick={(e) => {
+            e.stopPropagation();
+            onFavorite(event.id, !event.is_favorite);
+          }}
+          title={event.is_favorite ? "Remover dos favoritos" : "Favoritar"}
+        >
+          <Heart size={16} fill={event.is_favorite ? "currentColor" : "none"} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function RecommendationCard({ event, rec, compact }: { event: EventSummary; rec: Recommendation; compact?: boolean }) {
+  const navigate = useNavigate();
+  const addLeg = useUi((s) => s.addLeg);
+  return (
+    <div className="card card-hover flex flex-col gap-2 p-4" onClick={() => navigate(`/jogos/${event.id}`)}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-[11px] font-semibold uppercase tracking-wide text-ink-3">{event.competition_name}</div>
+          <div className="truncate text-sm font-semibold">
+            {event.home_name} <span className="text-ink-3">x</span> {event.away_name}
+          </div>
+          <div className="text-xs text-ink-2">
+            {dayLabel(event.kickoff_utc)} · {fmtTime(event.kickoff_utc)}
+          </div>
+        </div>
+        <GradeBadge grade={rec.confidence_grade} score={rec.confidence_score} />
+      </div>
+      <div className="flex items-center justify-between rounded-lg bg-bg px-3 py-2">
+        <div className="min-w-0">
+          <div className="label">{rec.market_label}</div>
+          <div className="truncate text-sm font-bold">
+            {rec.selection_name}
+            {rec.line !== null && !rec.selection_name.includes(String(rec.line)) ? ` ${rec.line}` : ""}
+          </div>
+        </div>
+        <span className="odd-pill bg-card text-base">{odd(rec.odd)}</span>
+      </div>
+      <div className={clsx("grid gap-2 text-xs", compact ? "grid-cols-3" : "grid-cols-4")}>
+        <Mini k="Modelo" v={pct(rec.model_prob)} />
+        <Mini k={rec.market_prob_is_fair ? "Mercado (justa)" : "Mercado"} v={pct(rec.market_prob)} />
+        <Mini k="Edge" v={<EdgeValue value={rec.edge_pp} />} />
+        {!compact && <Mini k="EV" v={<span className={rec.ev_pct > 0 ? "text-success" : "text-danger"}>{rec.ev_pct > 0 ? "+" : ""}{rec.ev_pct.toFixed(1)}%</span>} />}
+      </div>
+      {(rec.label || rec.evidence || rec.quality_gate || rec.state) && (
+        <div className="flex flex-wrap items-center gap-1">
+          {rec.state && rec.state !== rec.label ? <StateChip state={rec.state} text={rec.state_text} /> : <LabelChip label={rec.label} />}
+          {rec.label === "MODEL_FAVORITE" && rec.state && rec.state !== "MODEL_ONLY" && <LabelChip label={rec.label} />}
+          {rec.is_primary === false && rec.primary_of && (
+            <span className="chip bg-gray-100 text-ink-2" title={`Alternativa da mesma tese que ${rec.primary_of.replace("|", " · ")} — não é uma oportunidade adicional.`}>
+              ALTERNATIVA
+            </span>
+          )}
+          {rec.quality_gate && <GateChip passed={rec.quality_gate.passed} failed={rec.quality_gate.failed} />}
+          <EvidenceChip level={rec.evidence} compact />
+          {rec.model_prob_calibrated !== null && rec.calibration_reliable && <span className="chip bg-gray-100 text-ink-2">CALIBRADA</span>}
+        </div>
+      )}
+      {rec.why.length > 0 && (
+        <p className="line-clamp-2 text-[11px] leading-snug text-ink-2" title={rec.why.join("\n")}>
+          {rec.why[0]}
+        </p>
+      )}
+      {rec.state === "MODEL_ONLY" && <p className="text-[11px] leading-snug text-warning">Probabilidade calculada, mas sem preço de mercado válido para determinar valor.</p>}
+      {rec.reasons.includes("WATCHING_PRICE") && rec.price?.min_acceptable_odd && (
+        <p className="text-[11px] leading-snug text-warning">
+          Probabilidade interessante, mas preço atual não oferece margem suficiente — odd mínima aceitável {odd(rec.price.min_acceptable_odd)}.
+        </p>
+      )}
+      {rec.status !== "RECOMMENDED" && rec.why_not.length > 0 && rec.state !== "MODEL_ONLY" && !rec.reasons.includes("WATCHING_PRICE") && (
+        <p className="line-clamp-2 text-[11px] leading-snug text-warning" title={rec.why_not.join("\n")}>
+          {rec.why_not[0]}
+        </p>
+      )}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <StatusChip status={rec.status} />
+          <span className="text-[11px] text-ink-2" title={`Opportunity Score V3 (0–100)${rec.opportunity_adjustments ? " · ajustes: " + Object.entries(rec.opportunity_adjustments).map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v.toFixed(1)}`).join(", ") : ""}`}>
+            Score <b className="tabular-nums">{Math.round(rec.opportunity_score)}</b>
+          </span>
+        </div>
+        {rec.status !== "NO_BET" && (
+          <button
+            className="btn-ghost text-xs"
+            title="Adicionar ao construtor de múltiplas"
+            onClick={(e) => {
+              e.stopPropagation();
+              addLeg({
+                event_id: event.id,
+                market_key: rec.market_key,
+                selection_key: rec.selection_key,
+                line: rec.line,
+                odd: rec.odd,
+                label: `${rec.market_label}: ${rec.selection_name}`,
+                event_label: `${event.home_name} x ${event.away_name}`,
+                model_prob: rec.model_prob,
+              });
+            }}
+          >
+            <Plus size={14} /> Múltipla
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Mini({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-3">{k}</div>
+      <div className="font-semibold tabular-nums">{v}</div>
+    </div>
+  );
+}

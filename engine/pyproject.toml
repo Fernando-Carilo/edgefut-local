@@ -1,0 +1,59 @@
+[project]
+name = "edgefut-engine"
+version = "0.1.0"
+description = "EdgeFut AI — motor quantitativo local de análise de futebol (FastAPI sidecar)"
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "Proprietary" }
+dependencies = [
+  "fastapi>=0.115,<0.116",
+  "uvicorn[standard]>=0.30,<0.31",
+  "pydantic>=2.8,<3",
+  "pydantic-settings>=2.4,<3",
+  "sqlalchemy>=2.0,<2.1",
+  "httpx>=0.27,<0.28",
+  "pandas>=2.2,<2.3",
+  "numpy>=1.26,<2.1",
+  "scipy>=1.13,<1.15",
+  "duckdb>=1.0,<1.2",
+  "pyarrow>=16,<18",
+  "apscheduler>=3.10,<4",
+  "beautifulsoup4>=4.12,<5",
+  "lxml>=5.2,<6",
+  "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.5",
+  "pyinstaller>=6.8",
+]
+# Necessário apenas para providers de páginas dinâmicas (não usados hoje).
+dynamic = ["playwright>=1.45"]
+# Ollama é acessado via HTTP local; nenhuma dependência extra.
+
+[project.scripts]
+edgefut-engine = "edgefut.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["edgefut"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["value_disabled: corre com VALUE_ENABLED=false (padrão real da iteração 5)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]

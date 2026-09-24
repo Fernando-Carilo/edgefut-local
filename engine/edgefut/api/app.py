@@ -1,0 +1,129 @@
+"""Aplicação FastAPI do EdgeFut AI. Escuta apenas em 127.0.0.1 (ver core/config.py)."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from ..collectors import flush_source_log, install_source_log_sink
+from ..core import versions
+from ..core.config import settings
+from ..core.logging import setup_logging
+from ..core.paths import get_paths
+from ..db.immutability import install_snapshot_guard
+from ..db.migrations import run_migrations
+from ..db.session import get_engine
+from ..providers import CircuitOpen, SourceBlocked, SourceError
+from ..scheduler import jobs
+from . import bootstrap
+from .routers import events_router, flywheel_router, radar_router, system_router, tools_router, validation_router
+
+log = logging.getLogger(__name__)
+
+# Origens permitidas: apenas a janela Tauri e o dev server Vite locais.
+ALLOWED_ORIGINS = [
+    "tauri://localhost",
+    "https://tauri.localhost",
+    "http://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+]
+
+
+CACHE_BACKFILL_KEY = "flywheel_cache_backfill"
+
+
+def _backfill_cache_once(s) -> None:
+    """Uma única vez: as respostas HTTP reais guardadas em `data/cache` (iterações 1–4) entram como snapshots raw,
+    com `fetched_at` real e `source_version=…/cache-backfill`. Não é histórico fabricado — é o que foi realmente
+    pedido à Superbet antes do Collector V2 existir. Idempotente via Setting."""
+    from datetime import datetime
+
+    from ..db.models import Setting
+    from ..flywheel.collector import backfill_from_cache
+
+    if s.get(Setting, CACHE_BACKFILL_KEY) is not None:
+        return
+    try:
+        out = backfill_from_cache(s, get_paths().cache)
+    except Exception as exc:  # noqa: BLE001 — o boot nunca falha por causa do backfill
+        log.warning("backfill do cache falhou: %s", exc)
+        return
+    s.add(Setting(key=CACHE_BACKFILL_KEY, value={"at": datetime.utcnow().isoformat(), **out}))
+    log.info("backfill do cache HTTP → raw: %s", out)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    setup_logging()
+    get_paths().ensure()
+    run_migrations(get_engine())
+    install_snapshot_guard()
+    install_source_log_sink()
+    from ..db.session import session_scope
+    from ..flywheel.collector import reclassify_unknown, record_gap_if_needed
+    from ..flywheel.governance import register_freeze
+    from ..models.registry import sync_registry
+    from .routers.system import apply_settings, load_settings
+
+    with session_scope() as s:
+        apply_settings(load_settings(s))
+        sync_registry(s)
+        # iteração 5: freeze registado uma vez (idempotente) e lacuna de coleta do downtime registada no boot
+        register_freeze(s)
+        _backfill_cache_once(s)  # antes da lacuna: o downtime conta a partir da última coleta real conhecida
+        reclassify_unknown(s)
+        record_gap_if_needed(s, expected_cadence_min=settings.odds_refresh_min, reason="DOWNTIME")
+    if settings.autostart_bootstrap:
+        bootstrap.run_in_background(minimal=False)
+    log.info("EdgeFut engine %s em http://%s:%s", versions.APP_VERSION, settings.host, settings.port)
+    try:
+        yield
+    finally:
+        jobs.stop()
+        flush_source_log()
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="EdgeFut AI Engine",
+        version=versions.APP_VERSION,
+        description="Motor local de análise quantitativa de futebol. Não realiza apostas.",
+        lifespan=lifespan,
+        docs_url="/docs",
+        redoc_url=None,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["*"],
+    )
+
+    @app.exception_handler(SourceBlocked)
+    async def _blocked(request: Request, exc: SourceBlocked):
+        return JSONResponse(status_code=503, content={"detail": f"Fonte bloqueou a coleta: {exc}", "code": "UNRELIABLE_SOURCE"})
+
+    @app.exception_handler(CircuitOpen)
+    async def _circuit(request: Request, exc: CircuitOpen):
+        return JSONResponse(status_code=503, content={"detail": f"Fonte temporariamente indisponível: {exc}", "code": "SOURCE_UNAVAILABLE"})
+
+    @app.exception_handler(SourceError)
+    async def _source(request: Request, exc: SourceError):
+        return JSONResponse(status_code=502, content={"detail": f"Erro de fonte: {exc}", "code": "SOURCE_ERROR"})
+
+    app.include_router(system_router)
+    app.include_router(events_router)
+    app.include_router(radar_router)
+    app.include_router(tools_router)
+    app.include_router(validation_router)
+    app.include_router(flywheel_router)
+    return app
+
+
+app = create_app()
