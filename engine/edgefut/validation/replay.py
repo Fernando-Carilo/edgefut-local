@@ -235,6 +235,14 @@ class _WindowModels:
             self.sv2 = None
         self.elo = elo
         self._sides_cache: dict[str, list] = {}
+        self._raw_sides: dict[str, list] = {}
+        # vantagem de mando estimada no treino: multiplicador do strength-v2 quando existe, senão razão de gols casa/fora da liga
+        if self.sv2 is not None and getattr(self.sv2, "home_advantage", None):
+            self.home_advantage: float | None = float(self.sv2.home_advantage)
+        elif self.la is not None and self.la.away_goals:
+            self.home_advantage = float(self.la.home_goals / self.la.away_goals)
+        else:
+            self.home_advantage = None
         # baselines B e C
         hg = pd.to_numeric(train["hg"], errors="coerce")
         ag = pd.to_numeric(train["ag"], errors="coerce")
@@ -254,6 +262,24 @@ class _WindowModels:
             df = t[(t["home"] == team) | (t["away"] == team)].tail(40).iloc[::-1]
             self._sides_cache[team] = build_windows(to_sides(df, team)) if not df.empty else {}
         return self._sides_cache[team]
+
+    def _raw(self, team: str) -> list:
+        if team not in self._raw_sides:
+            t = self.train
+            df = t[(t["home"] == team) | (t["away"] == team)].tail(40).iloc[::-1]
+            self._raw_sides[team] = to_sides(df, team) if not df.empty else []
+        return self._raw_sides[team]
+
+    def team_features(self, team: str) -> dict:
+        """Features em T (só treino): forma recente (pts/jogo em 5), N de jogos no treino, ELO, ratings v2."""
+        sides = self._raw(team)
+        last5 = sides[:5]
+        ppg = float(np.mean([3.0 if x.result == "V" else 1.0 if x.result == "E" else 0.0 for x in last5])) if last5 else None
+        gd5 = float(np.mean([x.gf - x.ga for x in last5])) if last5 else None
+        n = int(((self.train["home"] == team) | (self.train["away"] == team)).sum())
+        rt = self.sv2.ratings.get(team) if self.sv2 is not None else None
+        return {"form5_ppg": ppg, "form5_gd": gd5, "n_train": n, "elo": self.elo.get(team),
+                "att": float(rt.attack) if rt else None, "def": float(rt.defense) if rt else None}
 
     def poisson_v1(self, home: str, away: str, ha_w: float):
         if self.la is None:
@@ -353,7 +379,44 @@ def _bets_for(pred: _Pred, model: str) -> list[_Bet]:
     return bets
 
 
-def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest) -> tuple[list[_Pred], list[_Bet], list[dict]]:
+def _frame_row(code: str, w_idx: int, r, mid: int, neutral: bool, group: str | None, odds, odds_ou, close, close_ou, outs: dict, wm: "_WindowModels", season_start: pd.Timestamp | None) -> dict:
+    """Uma linha por partida com TUDO o que existia em T (features, modelos, mercado) + resultado.
+
+    Closing odds entram como colunas separadas `close_*` apenas para CLV — o teste
+    `test_market_aware_never_uses_closing_line` garante que nenhuma feature as consome."""
+    hg, ag = int(r.hg), int(r.ag)
+    row: dict = {
+        "dataset": code, "mid": int(mid), "window": w_idx, "date": pd.Timestamp(r.date), "group": group,
+        "home": str(r.home), "away": str(r.away), "neutral": bool(neutral), "hg": hg, "ag": ag,
+        "outcome": _outcome(hg, ag), "over25": bool(hg + ag > 2.5),
+        "odds_h": odds[0] if odds else None, "odds_d": odds[1] if odds else None, "odds_a": odds[2] if odds else None,
+        "odds_o25": odds_ou[0] if odds_ou else None, "odds_u25": odds_ou[1] if odds_ou else None,
+        "close_h": close[0] if close else None, "close_d": close[1] if close else None, "close_a": close[2] if close else None,
+        "close_o25": close_ou[0] if close_ou else None, "close_u25": close_ou[1] if close_ou else None,
+        "overround_1x2": (sum(1.0 / o for o in odds) - 1.0) if odds else None,
+        "overround_ou": (sum(1.0 / o for o in odds_ou) - 1.0) if odds_ou else None,
+    }
+    for model, (p3, pou) in outs.items():
+        row[f"p_{model}_h"], row[f"p_{model}_d"], row[f"p_{model}_a"] = p3
+        row[f"p_{model}_ou"] = pou
+    fh, fa = wm.team_features(str(r.home)), wm.team_features(str(r.away))
+    row.update({
+        "elo_home": fh["elo"], "elo_away": fa["elo"],
+        "elo_diff": (fh["elo"] - fa["elo"]) if fh["elo"] is not None and fa["elo"] is not None else None,
+        "att_diff": (fh["att"] - fa["att"]) if fh["att"] is not None and fa["att"] is not None else None,
+        "def_diff": (fh["def"] - fa["def"]) if fh["def"] is not None and fa["def"] is not None else None,
+        "home_advantage": wm.home_advantage,
+        "form5_home": fh["form5_ppg"], "form5_away": fa["form5_ppg"], "gd5_home": fh["form5_gd"], "gd5_away": fa["form5_gd"],
+        "n_train_home": fh["n_train"], "n_train_away": fa["n_train"], "min_team_sample": min(fh["n_train"], fa["n_train"]),
+        "month": int(pd.Timestamp(r.date).month), "dow": int(pd.Timestamp(r.date).dayofweek),
+        "days_into_group": float((pd.Timestamp(r.date) - season_start).days) if season_start is not None else None,
+    })
+    core = [outs[k][0][0] for k in ("poisson", "dixon_coles", "bivariate_poisson") if k in outs]
+    row["agreement_pp"] = float((max(core) - min(core)) * 100.0) if len(core) >= 2 else None
+    return row
+
+
+def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest, *, collect_frame: bool = False) -> tuple[list[_Pred], list[_Bet], list[dict]] | tuple[list[_Pred], list[_Bet], list[dict], list[dict]]:
     frame = frame.dropna(subset=["hg", "ag"]).sort_values("date").reset_index(drop=True)
     frame["date"] = pd.to_datetime(frame["date"])
     tfs = TemporalFeatureStore(frame=frame)
@@ -363,6 +426,8 @@ def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest) -> tuple[
     preds: list[_Pred] = []
     bets: list[_Bet] = []
     windows: list[dict] = []
+    rows: list[dict] = []
+    group_start: dict[str, pd.Timestamp] = {}
     elo = EloTable()
     elo_cursor = first - timedelta(days=1)
     cum_losses: dict[str, list[float]] = {}
@@ -400,6 +465,10 @@ def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest) -> tuple[
                 group = str(getattr(r, "season", None) or "") or None
             outs = wm.predict(r.home, r.away, neutral, ens_w, str(getattr(r, "competition", "") or ""))
             outs.update(wm.baselines(r.home, r.away, neutral, odds, odds_ou))
+            if collect_frame:
+                if group and group not in group_start:
+                    group_start[group] = pd.Timestamp(r.date)
+                rows.append(_frame_row(code, w_idx, r, int(mid), neutral, group, odds, odds_ou, close, close_ou, outs, wm, group_start.get(group) if group else None))
             for model, (p3, pou) in outs.items():
                 pr = _Pred(code, w_idx, r.date, model, p3, pou, _outcome(hg, ag), hg + ag > 2.5, hg, ag, odds, odds_ou, close, close_ou, int(mid), group)
                 preds.append(pr)
@@ -413,6 +482,8 @@ def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest) -> tuple[
         start = w_end
         if req.max_matches_per_dataset and n_done >= req.max_matches_per_dataset:
             break
+    if collect_frame:
+        return preds, bets, windows, rows
     return preds, bets, windows
 
 
@@ -584,8 +655,34 @@ def aggregate(preds: list[_Pred], bets: list[_Bet], windows: list[dict], req: Re
     }
 
 
-def run_replay(req: ReplayRequest, *, session: Session | None = None, frames: dict[str, pd.DataFrame] | None = None, persist: bool = True, correlation_id: str | None = None) -> dict:
-    """Executa o replay em todos os datasets pedidos. `frames` permite injetar DataFrames (testes)."""
+def frame_to_dataframe(rows: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["date", "dataset", "mid"]).reset_index(drop=True)
+    return df
+
+
+def save_frame(df: pd.DataFrame, run_tag: str, out_dir=None) -> dict:
+    """Grava o frame por partida em Parquet versionado (`replay-frame-v1`), append-only por arquivo.
+    Devolve caminho + `dataset_version` (sha256 do conteúdo) para o frozen holdout."""
+    import hashlib
+    from pathlib import Path
+
+    from ..core.paths import get_paths
+
+    out_dir = Path(out_dir) if out_dir else get_paths().processed / "replay_frames"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"replay_frame_{run_tag}.parquet"
+    df.to_parquet(path, index=False)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    return {"path": str(path), "rows": int(len(df)), "dataset_version": f"replay-frame-v1:{digest}", "columns": list(df.columns)}
+
+
+def run_replay(req: ReplayRequest, *, session: Session | None = None, frames: dict[str, pd.DataFrame] | None = None, persist: bool = True, correlation_id: str | None = None, collect_frame: bool = True, return_frame: bool = False) -> dict:
+    """Executa o replay em todos os datasets pedidos. `frames` permite injetar DataFrames (testes).
+
+    Com `collect_frame` o replay também produz o frame por partida (features em T + modelos +
+    mercado + resultado) usado pelos challengers market-aware; persistido em Parquet quando `persist`."""
     from ..providers.historical import get_store
 
     t0 = time.perf_counter()
@@ -593,6 +690,7 @@ def run_replay(req: ReplayRequest, *, session: Session | None = None, frames: di
     all_preds: list[_Pred] = []
     all_bets: list[_Bet] = []
     all_windows: list[dict] = []
+    all_rows: list[dict] = []
     for code in req.datasets:
         if frames is not None:
             frame = frames.get(code)
@@ -601,7 +699,11 @@ def run_replay(req: ReplayRequest, *, session: Session | None = None, frames: di
         if frame is None or frame.empty:
             log.info("replay: dataset %s vazio", code)
             continue
-        p, b, w = replay_dataset(frame, code, req)
+        if collect_frame:
+            p, b, w, rows = replay_dataset(frame, code, req, collect_frame=True)  # type: ignore[misc]
+            all_rows.extend(rows)
+        else:
+            p, b, w = replay_dataset(frame, code, req)  # type: ignore[misc]
         all_preds.extend(p)
         all_bets.extend(b)
         all_windows.extend(w)
@@ -609,16 +711,32 @@ def run_replay(req: ReplayRequest, *, session: Session | None = None, frames: di
     report = aggregate(all_preds, all_bets, all_windows, req)
     report["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     report["generated_at"] = datetime.utcnow().isoformat()
+    report["classification"] = "RESEARCH MARKET BENCHMARK"
+    report["limitations"].append(
+        "Classificação: RESEARCH MARKET BENCHMARK — as odds históricas não têm carimbo de hora por partida; "
+        "não é um backtest 'tradable'. Executabilidade só na SUPERBET SHADOW VALIDATION."
+    )
+    frame_df = frame_to_dataframe(all_rows) if collect_frame else pd.DataFrame()
+    if collect_frame and persist and not frame_df.empty:
+        tag = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{'intl' if req.is_national else 'club'}"
+        try:
+            report["frame"] = save_frame(frame_df, tag)
+        except Exception as exc:  # noqa: BLE001 — frame é acessório do replay
+            log.warning("replay: falha ao gravar frame: %s", exc)
+            report["frame"] = {"error": str(exc)}
     if persist and session is not None:
         summary = {
             "matches": report["matches"], "matches_with_odds": report["matches_with_odds"], "datasets": report["datasets"],
             "windows": report["windows"], "scheme": req.scheme, "window_days": req.window_days,
             "ranking_brier": report["ranking_brier"],
             "vs_market": {m: (v.get("market") or {}).get("significance") for m, v in report["vs_baseline"].items()},
+            "classification": report["classification"], "frame": report.get("frame"),
         }
         session.add(ValidationRun(kind="replay", correlation_id=correlation_id, request=req.to_dict(), summary=summary, detail=report, duration_ms=report["duration_ms"]))
         session.commit()
+    if return_frame:
+        report["_frame_df"] = frame_df
     return report
 
 
-__all__ = ["ReplayRequest", "run_replay", "replay_dataset", "aggregate", "MODELS", "BASELINES", "MODEL_LABELS"]
+__all__ = ["ReplayRequest", "run_replay", "replay_dataset", "aggregate", "frame_to_dataframe", "save_frame", "MODELS", "BASELINES", "MODEL_LABELS"]
