@@ -52,6 +52,17 @@ pipeline é o **required edge** (seção 16) e o bloco informativo MARKET vs
 EDGEFUT. Detalhes em [`MARKET_AWARE_MODELS.md`](MARKET_AWARE_MODELS.md) e
 [`ITERATION_4_REPORT.md`](ITERATION_4_REPORT.md).
 
+**MODEL FREEZE (iteração 5):** nenhum modelo desta página foi treinado,
+ajustado, substituído ou acrescentado. `flywheel/governance.register_freeze`
+gravou no boot da v5 `model_hash 4608dbf2fe2b87e4`, `config_hash
+9846d74330b32763` e `dataset_version history:4f53cda18c2baa0c` para os 21
+módulos de modelo; `freeze_status` compara a cada arranque e a UI mostra
+`INTACT`/`DRIFTED`. Famílias **proibidas**: deep learning, transformers, redes
+neurais, gradient boosting. `1X2 market-aware modeling` está em **PAUSE**. A
+iteração 5 mede o mercado (margem, CLV V2, movimento, liquidação por mercado) —
+o modelo é um dos objetos medidos, não algo a "melhorar" antes de haver dados
+(§30: não ajustar modelo antes de medir). Ver [`DATA_FLYWHEEL.md`](DATA_FLYWHEEL.md).
+
 ## 1. Team Strength Engine (`strength-v1`)
 
 Janelas: últimos 5, 10 e 20 jogos, com peso de recência exponencial

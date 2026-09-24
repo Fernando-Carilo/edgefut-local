@@ -88,6 +88,8 @@ Rollback = promover o consenso anterior, com motivo.
 | **Extreme probability guard** | penaliza a **confiança** (×0,85 ou ×0,70) e registra `EXTREME_PROBABILITY` | não trunca a probabilidade |
 | **Reconciliação** (`SETTLEMENT_ERROR`, divergências) | alerta | não reescreve snapshots (correções vão para `snapshot_correction`) |
 | **Decay walk-forward** | recomenda e grava o half-life | não roda sozinho: é disparado por operador |
+| **Market discovery / hipóteses** (it. 5) | mede por mercado, muda maturidade e estado de edge, marca `VALUE_ENABLEMENT_CANDIDATE` | **não** liga VALUE, não muda staking, não altera modelo nem thresholds |
+| **Collector health / schema change** (it. 5) | alerta, quarentena, `DEGRADED/BROKEN` | não adivinha campos, não apaga raw, não preenche lacunas |
 
 ## 6. O que é gravado (auditoria)
 
@@ -140,3 +142,37 @@ período posterior.
 Estado em 2026-09-24: **NO EVIDENCE OF MARKET EDGE** nos dois mercados
 (1X2, OU 2,5), `MARKET EDGE STATUS = UNPROVEN`; nenhum challenger market-aware
 alimenta recomendações (`docs/ITERATION_4_REPORT.md`).
+
+## 9. Iteração 5 — MODEL FREEZE e governança por mercado (`flywheel/governance.py`)
+
+**Freeze.** Nenhum modelo muda nesta iteração. `register_freeze` grava
+`model_hash`, `config_hash`, `dataset_version` e a lista de 21 módulos
+congelados; `freeze_status` devolve `INTACT` ou `DRIFTED` (mostrado na UI e
+nos relatórios). Famílias proibidas: deep learning, transformers, redes neurais,
+gradient boosting. `1X2 market-aware modeling` em **PAUSE**. Qualquer alteração
+de modelo é uma nova iteração com novo hash — não um ajuste "para ver".
+
+**Estado de edge por mercado** (`market_edge_state`, 15 categorias canônicas):
+
+```
+UNPROVEN ──► COLLECTING ──► PROMISING ──► VALIDATED   (só por ação humana, com motivo)
+                 │                └──► REJECTED    (mercado claramente melhor, amostra MATURE)
+                 └─ regressa se a evidência deixar de ser conclusiva
+```
+
+`VALUE_ENABLEMENT_CANDIDATE` exige **todas**: N efetivo ≥ 500 · EdgeFut bate a
+fair da Superbet (ΔBrier IC inteiramente < 0) · CLV IC inferior ≥ 0 · calibração
+sem viés detetável · hipótese pré-registada `SUPPORTED` após BH-FDR · ≥ 30 dias
+de confirmação. Regras cumpridas/falhadas ficam em `evidence` e na tela Pesquisa.
+
+**O que nunca acontece sozinho**: ligar `VALUE_ENABLED` (é `POST
+/flywheel/edge-states/{cat}/value` com `reason`, gravado em `history` e
+`manual_correction`; só aceito se candidato); ligar staking/Kelly
+(`staking_enabled()` exige `VALIDATED` + VALUE em pelo menos um mercado);
+mapear um `marketId` ambíguo; editar raw.
+
+**Efeito no pipeline**: uma seleção que passa o quality gate num mercado com
+VALUE desligado é `RESEARCH_SIGNAL` (observar, não apostar); `/bankroll/stake`
+devolve `DISABLED` com o motivo. Estado em 2026-09-24: 15 × `UNPROVEN`, 0
+candidatos, 0 VALUE, staking DISABLED — o resultado correto para 0 seleções
+liquidadas (`docs/ITERATION_5_REPORT.md`).

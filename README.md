@@ -24,11 +24,12 @@ PROBABILIDADE → ODD JUSTA → COMPARAÇÃO SUPERBET → EDGE → RISCO → REC
 | **Odds** | Probabilidade implícita, remoção de margem **Shin** e multiplicativa (ambas armazenadas, método configurável), abertura × atual com probabilidade implícita ("1,72 → 1,54 −10,5 % · 58,1 % → 64,9 %"), closing line usada **só para CLV** |
 | **Decisão** | Edge (pp), EV, **EDGEFUT CONFIDENCE 0–100** com breakdown em 6 grupos, **Opportunity Score V3** 0–100 (9 componentes configuráveis + ajustes explícitos, nunca a odd), **Quality Gate** para TOP OPORTUNIDADES, **estados** `MODEL_ONLY` → `MARKET_OBSERVED` → `VALUE_CANDIDATE` → `VALUE` / `OBSERVATION` / `NO_BET` (VALUE exige prova out-of-sample no mercado), rótulos **MODEL FAVORITE ≠ VALUE**, **clusters** (uma primária por tese, alternativas marcadas, exposição por evento), **price target** (break-even, odd mínima aceitável, sensibilidade do edge, watchlist), **WHY THIS BET / WHY NOT / WHY MODEL CHANGED**, **NO BET** com 12 motivos. Limiares nunca são reduzidos automaticamente |
 | **Avaliação** | `prediction_snapshot` imutável (correções em tabela separada) gravado antes do jogo e liquidado depois; `TemporalFeatureStore` (`as_of` em toda leitura, `LeakageError` se vazar); Backtest Lab e **Historical Replay** walk-forward com 5 baselines (mercado, ingênuo, Poisson simples, ELO, favorito), **bootstrap IC 95 %**, qualidade de amostra (INSUFFICIENT / EARLY / MODERATE / STRONG) e significância; **shadow mode** append-only com relatório diário; **reconciliação de settlement**; **drift monitor** (só alerta); Hit rate, Brier, Log loss, ROI, Yield, Drawdown, CLV por mercado/competição/cluster/estado; diagrama de confiabilidade RAW vs CALIBRATED; nível de evidência por análise (`MODEL_ONLY` / `BACKTEST_ODDS` / `SETTLED`) |
-| **Governança** | `model_registry` com papéis champion / challenger / baseline; **regra de promoção** explícita (Brier OOS com IC pareado, LogLoss, ECE, N ≥ 300, estabilidade ≥ 60 % das janelas; **ROI não é critério**); promoção é ação humana registrada, nunca automática; **MODEL HEALTH** discreto no Início |
+| **Governança** | `model_registry` com papéis champion / challenger / baseline; **regra de promoção** explícita (Brier OOS com IC pareado, LogLoss, ECE, N ≥ 300, estabilidade ≥ 60 % das janelas; **ROI não é critério**); promoção é ação humana registrada, nunca automática; **MODEL HEALTH** discreto no Início; **MODEL FREEZE** (it. 5) e **máquina de estados de edge por mercado** `UNPROVEN → COLLECTING → PROMISING → VALIDATED / REJECTED` com `VALUE_ENABLED=false` por defeito e staking/Kelly **DISABLED** até `VALIDATED` |
+| **Data Flywheel** (it. 5) | Superbet Collector V2: raw **append-only** (triggers SQLite) + normalizada v1, alvos T-48h…T-5m + closing = último pré-KO, cobertura, saúde HEALTHY/DEGRADED/BROKEN, lacunas de downtime, quarentena, registo de **todo** `marketId` (MAPPED / OUT_OF_SCOPE / UNKNOWN); liquidação por mercado que nunca assume derrota; Margin Lab, CLV V2, STEAM/DRIFT/STABLE; hipóteses pré-registadas + BH-FDR; backup 7/4/3, restore, export CSV/Parquet; **coletor em segundo plano** (bandeja, autostart) |
 | **Ao Vivo** | Modo **observação**: placar, minuto e odds reais da Superbet (`offerState=live`), "Odds atualizadas há N s", **sem recomendações**; estatísticas que a fonte não expõe não são estimadas |
 | **Operação** | Scheduler V2 com histórico de execuções e correlation id (Sistema → Jobs), alertas locais, `model_registry`, cache de análise por versão de modelo, logs JSON estruturados |
 | **Explicação** | ExplanationEngine por templates + **Edge AI** (perguntas respondidas só com os números da análise); Ollama local opcional para reescrever |
-| **UI** | Início (resumo da manhã + **VER RADAR** + MODEL HEALTH), Radar V2 (cards por estado), Jogos, Partida (com **Ver fontes**, **Teses e exposição**, **Why model changed**, price target), Melhores Entradas, Ao Vivo, Múltiplas (com correlação), Backtest Lab, **Validação** (Model Validation · Model Comparison · Coverage Map · Shadow · Drift), Histórico, Favoritos, Fontes V2, Modelos, Performance (Resultados · Calibração · por cluster/estado), Alertas, Sistema → Jobs, Sistema → Diagnóstico, Configurações |
+| **UI** | Início (resumo da manhã + **VER RADAR** + MODEL HEALTH), Radar V2 (cards por estado), Jogos, Partida (com **Ver fontes**, **Teses e exposição**, **Why model changed**, price target), Melhores Entradas, Ao Vivo, Múltiplas (com correlação), Backtest Lab, **Validação** (Model Validation · Model Comparison · Coverage Map · Shadow · Drift), Histórico, Favoritos, Fontes V2, Modelos, Performance (Resultados · Calibração · por cluster/estado), **Data Flywheel**, **Superbet Lab**, **Pesquisa**, Alertas, Sistema → Jobs, Sistema → Diagnóstico, **Sistema → Dados** (Settlement · Mercados desconhecidos · Quarentena · Armazenamento · Identidade · Relatório), Configurações (coletor em segundo plano, iniciar com o Windows) |
 
 Todo número na tela carrega `source, sourceUrl, collectedAt, confidence, sampleSize` e um status de frescor. Não há dados mock: o que não existe aparece como indisponível.
 
@@ -222,6 +223,28 @@ Radar continua com 0 VALUE e a tela diz isso. Detalhes em
 [docs/MARKET_AWARE_MODELS.md](docs/MARKET_AWARE_MODELS.md) e
 [docs/SUPERBET_VALIDATION.md](docs/SUPERBET_VALIDATION.md).
 
+## Data Flywheel & mercados especializados (iteração 5) — construir evidência, não apostas
+
+Depois de "NO EVIDENCE OF MARKET EDGE", a iteração 5 **não** tenta outro modelo (freeze `INTACT`, 21
+modelos, sem deep learning/boosting, 1X2 market-aware em PAUSE). Constrói o ativo que faltava: um
+**dataset próprio da Superbet**, append-only, por mercado, coletado pelo app em segundo plano.
+
+| O que existe agora | Números reais em 2026-09-24 19:11 UTC |
+|---|---|
+| Camada raw imutável (`raw_superbet_snapshot`, triggers SQLite) + normalizada v1, alvos T-48h…T-5m + closing = último pré-KO, sem interpolação | 640 raw · 381 jogos · 16 095 linhas normalizadas · 0 lacunas · 0 em quarentena |
+| Canonicalização de 15 mercados; todo `marketId` registado como MAPPED / OUT_OF_SCOPE (motivo) / UNKNOWN | 460 marketIds → 24 / 436 / **0**; cobertura 100 % |
+| Liquidação por mercado que **nunca assume derrota** (`UNSETTLED_DATA_MISSING`) + MARKET DATA COVERAGE | 0 liquidadas — primeiro kickoff com preço pré-jogo real: 24/09 19:00 UTC |
+| Margin Lab, eficiência por T, CLV V2, STEAM/DRIFT/STABLE, SIGNAL VS MOVEMENT — descritivos | overround 1X2 9,0 % · totais 8,0–8,2 % (5,0–5,2 % a T-48h/T-24h) · escanteios 7,9 %; CLV/movimento **INSUFFICIENT** |
+| Discovery por mercado, maturidade, 8 hipóteses **pré-registadas** com BH-FDR | 15 × COLLECTING / UNPROVEN · 8 CONFIRMING · 0 SUPPORTED |
+| `VALUE_ENABLED=false` por mercado, `RESEARCH_SIGNAL`, candidato nunca automático, staking/Kelly DISABLED | 0 VALUE · 0 candidatos · 6 regras de enablement, 0 cumpridas |
+| Windows always-on: bandeja com saúde, close-to-tray, autostart opcional, Sair encerra o sidecar | coletor HEALTHY · 440 snapshots/h · 100 % sucesso |
+| Backup 7/4/3 + restore seguro, export CSV/Parquet, storage dashboard, quarentena, relatórios RESEARCH ONLY | 1 backup íntegro · 2,7 MB/dia · 0,97 GB/ano |
+
+**Resposta ao "em que mercado vale a pena investir pesquisa?": `INSUFFICIENT`** — e isso é o resultado
+correto para 1,5 h de coleta. Detalhes em [docs/ITERATION_5_REPORT.md](docs/ITERATION_5_REPORT.md),
+[docs/SUPERBET_DATASET.md](docs/SUPERBET_DATASET.md), [docs/MARKET_MAPPING.md](docs/MARKET_MAPPING.md) e
+[docs/DATA_FLYWHEEL.md](docs/DATA_FLYWHEEL.md).
+
 ---
 
 ## Segurança e ética
@@ -250,6 +273,11 @@ Radar continua com 0 VALUE e a tela diz isso. Detalhes em
 - [docs/MARKET_AWARE_MODELS.md](docs/MARKET_AWARE_MODELS.md) — mercado como prior, challengers blend/stack/residual, CV temporal aninhada, holdout congelado, required edge
 - [docs/SUPERBET_VALIDATION.md](docs/SUPERBET_VALIDATION.md) — evidência Superbet: cobertura, buckets, overround, movimento, viés, Superbet fair como baseline, CLV, shadow v2
 - [docs/ITERATION_4_REPORT.md](docs/ITERATION_4_REPORT.md) — resultado: NO EVIDENCE OF MARKET EDGE, com todos os números
+- [docs/ITERATION_5_BASELINE.md](docs/ITERATION_5_BASELINE.md) — auditoria antes da iteração 5 (sem raw layer, unknown markets descartados, sem background)
+- [docs/SUPERBET_DATASET.md](docs/SUPERBET_DATASET.md) — camadas raw/normalizada/liquidação, alvos, cobertura, lacunas, quarentena, backup, números reais
+- [docs/MARKET_MAPPING.md](docs/MARKET_MAPPING.md) — canonicalização: 15 categorias, marketIds mapeados, motivos OUT_OF_SCOPE, processo para UNKNOWN
+- [docs/DATA_FLYWHEEL.md](docs/DATA_FLYWHEEL.md) — o ciclo coletar → liquidar → medir → hipótese → governança; jobs, UI, Windows always-on
+- [docs/ITERATION_5_REPORT.md](docs/ITERATION_5_REPORT.md) — resultado: INSUFFICIENT (0 liquidadas), os 27 números obrigatórios, aceitação §69
 
 ## Licença
 

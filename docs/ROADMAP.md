@@ -1,10 +1,9 @@
 # EdgeFut AI — Roadmap
 
-Fases conforme a especificação. Estado após a **iteração 3 (MODEL VALIDATION
-& PREDICTIVE QUALITY)**. Cada ✅ abaixo foi verificado por código, teste
-automatizado e execução real (baselines em `ITERATION_2_BASELINE.md` e
-`ITERATION_3_BASELINE.md`; relatórios em `ITERATION_2_REPORT.md` e
-`ITERATION_3_REPORT.md`).
+Fases conforme a especificação. Estado após a **iteração 5 (SUPERBET DATA
+FLYWHEEL & SPECIALIZED MARKET DISCOVERY)**. Cada ✅ abaixo foi verificado por
+código, teste automatizado e execução real (baselines em `ITERATION_N_BASELINE.md`;
+relatórios em `ITERATION_N_REPORT.md`, N = 2…5).
 
 | Fase | Escopo | Estado |
 |---|---|---|
@@ -22,6 +21,8 @@ automatizado e execução real (baselines em `ITERATION_2_BASELINE.md` e
 | — | **Ao Vivo (observação)** | ✅ `offerState=live`, polling com backoff, placar/minuto/odds reais, **sem recomendações**, nada estimado |
 | — | **Data Quality** | ✅ freshness FRESH/AGING/STALE/EXPIRED por tipo de insumo, Source Conflict Engine, CanonicalEventResolver, Health Dashboard (Sistema → Diagnóstico) |
 | — | **Operação** | ✅ Scheduler V2 com `job_run` e correlation id (Sistema → Jobs), alertas locais, imutabilidade de snapshots + correções, `model_registry`, cache por versão |
+| — | **Market-aware & Superbet (iteração 4)** | ✅ mercado como prior, challengers blend/stack/residual, holdout congelado (1×), Superbet evidence engine, required edge; **resultado: NO EVIDENCE OF MARKET EDGE** |
+| — | **Data Flywheel (iteração 5)** | ✅ MODEL FREEZE; raw/normalizada **append-only** (triggers), alvos T-x + closing, cobertura, saúde, lacunas, quarentena, registo de todo marketId; settlement por mercado (nunca assume derrota); Margin Lab/CLV V2/STEAM-DRIFT-STABLE; hipóteses pré-registadas + FDR; estados de edge por mercado, `VALUE_ENABLED=false`, `RESEARCH_SIGNAL`, staking DISABLED; **coletor em segundo plano** (bandeja, autostart); backup 7/4/3, restore, export; **resultado: INSUFFICIENT — 0 VALUE é o resultado correto** |
 
 ## Iteração 2 — critérios de saída
 
@@ -79,7 +80,31 @@ automatizado e execução real (baselines em `ITERATION_2_BASELINE.md` e
 - [x] 183 testes backend, typecheck e build verdes
 - [x] **Resultado: α = 1,0 venceu; nenhum challenger passa `brier_better` no holdout (1X2 Δ −0,0001 [−0,0020; +0,0017]; OU 2,5 −0,0002 [−0,0013; +0,0009]); mercado correto nos testes contrarian; 0 segmentos sobrevivem ao FDR; Superbet N efetivo 10 → NO EVIDENCE OF MARKET EDGE.** Nenhum threshold relaxado; Model Health `WATCH`; 0 VALUE
 
-## Próximos passos (após a iteração 4)
+## Iteração 5 — critérios de saída (§69) e resultado
+
+- [x] baseline auditado (`ITERATION_5_BASELINE.md`): sem raw layer, snapshots só quando o preço muda, unknown markets descartados (14/414 mapeados), sem métricas de coletor, settlement ambíguo, sem quarentena/backup/background
+- [x] **MODEL FREEZE**: 21 modelos com `model_hash 4608dbf2fe2b87e4`, `config_hash 9846d74330b32763`; sem DL/boosting; 1X2 market-aware em PAUSE; nenhum treino nesta iteração
+- [x] DB v5: `raw_superbet_snapshot` e `superbet_normalized_v1` **append-only por triggers SQLite**; `market_mapping_registry`, `data_quarantine`, `collector_gap`, `experiment_registry`, `manual_correction`, `market_edge_state`
+- [x] Collector V2: 1 raw por fetch real, confirmação por referência, alvos T-48h…T-5m + `LAST_PRE_KO`, sem interpolação; cobertura por alvo/mercado; saúde HEALTHY/DEGRADED/BROKEN; lacunas de downtime; schema change; backfill único e honesto do cache HTTP
+- [x] canonicalização de 15 mercados; 460 marketIds registados → 24 MAPPED / 436 OUT_OF_SCOPE (18 motivos) / **0 UNKNOWN**; decisão manual auditada; mapear ambíguo é proibido
+- [x] Settlement V2 por mercado: `WON/LOST/VOID/UNSETTLED_DATA_MISSING/UNSUPPORTED`; nunca assume derrota; auditoria + MARKET DATA COVERAGE
+- [x] Research: Margin Lab (faixa × T × linha), eficiência por T, CLV V2, STEAM/DRIFT/STABLE, SIGNAL VS MOVEMENT; discovery com maturidade COLLECTING/EARLY/TESTABLE/MATURE; 8 hipóteses pré-registadas; BH-FDR q 0,10
+- [x] Governança: estados UNPROVEN→COLLECTING→PROMISING→VALIDATED/REJECTED por mercado; 6 regras de `VALUE_ENABLEMENT_CANDIDATE`; `VALUE_ENABLED=false`; `RESEARCH_SIGNAL`; Required Edge V2; staking/Kelly DISABLED
+- [x] UI: faixa §3; Data Flywheel; Superbet Lab (3 abas); Pesquisa; Sistema → Dados (6 abas); cartão RESEARCH SIGNAL; saúde do coletor no rodapé; Configurações de background
+- [x] Windows always-on: bandeja com saúde/último sync, close-to-tray, autostart opcional (`--tray`), Sair encerra sidecar, `collector_gap` no boot
+- [x] backup diário 7/4/3 + manifest, restore com cópia prévia (recusa ficheiro ilegível), export CSV/Parquet, storage dashboard, quarentena com UI, relatórios diário/semanal RESEARCH ONLY
+- [x] 201 testes backend (18 novos §68), ruff, typecheck e build verdes; correção de bloqueio de ficheiro sqlite3 apanhada pelo CI Windows
+- [x] **Resultado: `INSUFFICIENT` — 640 raw, 381 jogos, 16 095 normalizadas, 0 liquidadas (primeiro kickoff com preço pré-jogo real 24/09 19:00 UTC), 15 mercados COLLECTING/UNPROVEN, 0 VALUE, 0 candidatos. Overround por mercado medido (1X2 9,0 %, totais 8,0–8,2 %, escanteios 7,9 %). 0 VALUE é o resultado correto (§72).**
+
+## Próximos passos (após a iteração 5)
+
+1. **Deixar o app a correr** (coletor em segundo plano). Marcos: `EARLY` a 50 clusters liquidados por mercado, `TESTABLE` a 200, `MATURE` a 500; hipóteses só contam para o FDR após 30 dias de confirmação (≥ 2026-10-24).
+2. Quando `TOTAL_GOALS`/`CORNERS_TOTAL` chegarem a `TESTABLE`: ler **Superbet fair vs resultado** e **CLV por T** antes de qualquer EdgeFut vs fair.
+3. Registar como **nova** hipótese a observação "margem de totais a T-48h/T-24h (≈ 5 %) < a T-1h (≈ 8 %)"; nunca testar no dado em que foi vista.
+4. Validar em Windows real: close-to-tray, tooltip de saúde, arranque `--tray`, `collector_gap` após reboot.
+5. Provider de estatísticas secundárias (escanteios/cartões/finalizações) para que `UNSETTLED_DATA_MISSING` desça — sem isso os mercados secundários ficam em COLLECTING por falta de liquidação, não por falta de preço.
+
+## Próximos passos herdados (após a iteração 4)
 
 1. **Acumular shadow Superbet liquidado com closing** (≥ 30 jogos, depois ≥ 300 seleções por mercado) para que CLV, viés e Superbet-fair-vs-EdgeFut tenham IC por evento.
 2. Qualquer nova hipótese market-aware exige novo `config_hash`, nova descoberta e **holdout em período posterior a 2026-09-24**; nunca reajustar sobre o holdout já consumido.

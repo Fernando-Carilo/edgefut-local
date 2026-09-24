@@ -12,11 +12,13 @@
 │  │  React + TypeScript + Vite + Tailwind + TanStack Query + Zustand │  │
 │  │  Radar V2 · Jogos · Página do Jogo · Melhores Entradas · Lab ·  │  │
 │  │  Ao Vivo · Histórico · Fontes V2 · Modelos · Performance ·       │  │
-│  │  Validação · Alertas · Sistema (Jobs · Diagnóstico) · Edge AI    │  │
+│  │  Validação · Data Flywheel · Superbet Lab · Pesquisa · Alertas · │  │
+│  │  Sistema (Jobs · Diagnóstico · Dados) · Edge AI                  │  │
 │  └───────────────────────────┬────────────────────────────────────┘  │
-│                              │ HTTP (127.0.0.1:8765)                  │
+│  bandeja (saúde do coletor)  │ HTTP (127.0.0.1:8765)                  │
 │  ┌───────────────────────────▼────────────────────────────────────┐  │
 │  │  sidecar: edgefut-engine.exe  (FastAPI, Python 3.12)             │  │
+│  │  continua a correr com a janela fechada (close-to-tray)          │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────┘
                                │
@@ -92,6 +94,10 @@ edgefut-local/
 │   │   │                      # drift, governance (champion/challenger + promoção market-aware),
 │   │   │                      # model_health (V2), market_aware (blend/stack/residual, frozen holdout),
 │   │   │                      # superbet (SuperbetEvidenceEngine)
+│   │   ├── flywheel/          # it. 5: markets (canonicalização), collector (raw/normalizada append-only, alvos,
+│   │   │                      # quarentena, gaps, backfill), coverage, reliability (saúde), settlement (por mercado),
+│   │   │                      # research (margin lab, CLV V2, movimento, discovery, experimentos/FDR),
+│   │   │                      # governance (freeze, edge states, VALUE_ENABLED, staking), storage (backup/export), reports
 │   │   ├── explanations/      # templates PT-BR, Edge AI (grounded), Ollama opcional
 │   │   ├── backtesting/       # Lab (as_of), settlement, reconciliação, métricas, performance por grupo/cluster/estado
 │   │   ├── alerts/            # alertas locais (tabela alert) + watchlist de preço
@@ -104,7 +110,9 @@ edgefut-local/
 │   └── shared/                # utilitários de formatação compartilhados
 ├── data/
 │   ├── raw/                   # CSVs baixados (football-data, international_results)
-│   ├── processed/             # Parquet normalizado (lido via DuckDB)
+│   ├── processed/             # Parquet normalizado (lido via DuckDB) + frames de pesquisa do flywheel
+│   ├── backups/               # backups SQLite diários (7/4/3) + manifest JSON; cópias pre-restore
+│   ├── exports/               # exportações CSV/Parquet pedidas pelo utilizador
 │   └── cache/                 # cache HTTP (JSON) com TTL
 ├── scripts/                   # dev.ps1, install.ps1, build-windows.ps1, dev.sh
 └── docs/
@@ -152,6 +160,12 @@ retornam `LINEUP_UNCERTAINTY`.
   `shadow_prediction` (append-only), `validation_run` (replay / decay /
   bootstrap / shadow_report / drift / promotion), `job_run`, `alert`,
   `source_log`, favoritos, settings.
+  **Iteração 5 (schema v5)**: `raw_superbet_snapshot` e `superbet_normalized_v1`
+  **append-only por triggers SQLite** (`trg_*_no_update/no_delete` — valem para
+  qualquer cliente, não só o ORM), `superbet_settlement_v1`,
+  `market_mapping_registry`, `data_quarantine`, `collector_gap`,
+  `experiment_registry`, `manual_correction`, `market_edge_state`.
+  Detalhe em `SUPERBET_DATASET.md`.
 - **Parquet + DuckDB** (`data/processed/*.parquet`): partidas históricas
   (football-data.co.uk, international_results). Consultas analíticas via DuckDB.
 
@@ -226,19 +240,39 @@ amostras liquidadas; a análise sempre expõe RAW e, quando existe, CALIBRATED.
 O cache de análise é chaveado pela tupla de versões de modelo
 (`core/versions.py`), portanto uma mudança de modelo invalida o cache sozinha.
 
+### 4.6b Data Flywheel (`flywheel/`, iteração 5)
+
+Camada independente dos modelos (que estão congelados): **coletar** a oferta da
+Superbet em raw append-only (1 linha por fetch real, confirmação por referência
+quando o payload não muda), **normalizar** para 15 mercados canônicos com
+`fair_prob`/`overround` só em mercado completo, **liquidar** por mercado sem
+assumir derrota, **medir** (margem por faixa/T/linha, CLV V2, STEAM/DRIFT/STABLE,
+lead/lag), **registar hipóteses** antes de confirmar (BH-FDR) e **governar** o
+estado de edge por mercado (`VALUE_ENABLED=false`, `RESEARCH_SIGNAL`, staking
+DISABLED). Regras invioláveis: raw nunca editado (triggers), nada interpolado,
+unknown markets sempre registados, quarentena em vez de descarte, VALUE nunca
+automático. Ver `DATA_FLYWHEEL.md`, `SUPERBET_DATASET.md`, `MARKET_MAPPING.md`.
+API: `GET|POST /flywheel/*` (`api/routers/flywheel.py`).
+
 ### 4.7 Scheduler, jobs, alertas e saúde
 
 `scheduler/jobs.py` registra 14 jobs (`events`, `odds`, `history`, `settle`,
 `radar`, `closing_lines`, `performance`, `calibration`, `ensemble_weights`,
 `cache_cleanup`, `live_poll`, **`reconcile`** (6 h — classifica todo evento
 terminado, liquida `shadow_prediction`), **`shadow_report`** (24 h) e
-**`drift`** (24 h — só alerta)). No boot, `job_run` em `running` sem processo
-vivo são marcados `interrupted`. Cada execução grava `job_run` (início, fim,
+**`drift`** (24 h — só alerta)) e, na iteração 5, **`flywheel_settle`** (30 min),
+**`flywheel_health`** (10 min), **`flywheel_research`** (6 h), **`flywheel_daily`**
+(24 h), **`flywheel_weekly`** (7 d) e **`backup`** (24 h). No boot, `job_run` em
+`running` sem processo vivo são marcados `interrupted`; o lifespan da API também
+regista o freeze de modelos, faz o backfill único do cache HTTP, reclassifica
+`UNKNOWN` pelo código atual e grava `collector_gap` se houve downtime. Cada execução grava `job_run` (início, fim,
 status, resumo, correlation id) e pode ser disparada manualmente por
 `POST /jobs/{job}/run`. `alerts/` compara o ciclo atual do radar com o anterior
 e grava alertas locais (sem rede, sem push): `ODD_MOVEMENT` (≥ 5 %),
 `DATA_QUALITY_CHANGE` (≥ 15 pontos), `MODEL_CONFIDENCE_CHANGE` (grau mudou),
-`OPPORTUNITY_APPEARED`, `OPPORTUNITY_LOST`. `quality/health.py` consolida o
+`OPPORTUNITY_APPEARED`, `OPPORTUNITY_LOST`; iteração 5: `RESEARCH_SIGNAL`,
+`PRICE_TARGET_REACHED`, `LINE_MOVED`, `COLLECTOR_DEGRADED`, `SCHEMA_CHANGED`,
+`SETTLEMENT_COMPLETED` — nunca "BET NOW". `quality/health.py` consolida o
 estado de cada componente (SQLite, DuckDB, cache HTTP, Superbet pré-jogo e ao
 vivo, calendário, históricos, liquidação, scheduler, jogadores, Ollama) em
 `GET /health/system` — é o que a tela Diagnóstico e o indicador do header
@@ -273,6 +307,9 @@ mostram.
   Cloudflare/CAPTCHA.
 - Configurações sensíveis (ex.: token de LLM remoto, se um dia existir) via
   keyring do SO — hoje não há nenhuma.
+- A shell Tauri recebe do frontend apenas duas flags (`background_collector`,
+  `autostart_on_login`) e lê `GET /flywheel/collector/health` para a bandeja;
+  nunca credenciais nem dados de apostas.
 
 ## 7. Empacotamento
 
@@ -282,7 +319,16 @@ mostram.
    `apps/desktop/src-tauri/binaries/edgefut-engine-x86_64-pc-windows-msvc.exe`.
 2. `pnpm tauri build` gera `EdgeFutAI-Setup.exe` (NSIS).
 
-O Tauri sobe o sidecar no boot, aguarda `/health`, e só então mostra a janela.
+O Tauri sobe o sidecar no boot, aguarda `/health`, e só então mostra a janela
+(ou fica na bandeja quando arrancado com `--tray` pelo autostart).
+
+**Coletor em segundo plano (iteração 5, §46–§48)** — `src-tauri/src/lib.rs`:
+ícone de bandeja com tooltip `saúde · última sync · snapshots/h` (poll a cada
+60 s), menu Abrir / Estado do coletor / Ver Data Flywheel / Atualizar / Sair;
+com `background_collector` ligado, fechar a janela esconde-a e o sidecar segue a
+coletar; "Sair" encerra janela, bandeja e sidecar; `tauri-plugin-autostart`
+opcional. Downtime é registado pelo engine no boot seguinte (`collector_gap`),
+nunca preenchido.
 
 ## 8. Contratos
 

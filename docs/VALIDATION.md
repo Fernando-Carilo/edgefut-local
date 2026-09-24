@@ -233,6 +233,32 @@ mercado, competição, **primárias × alternativas** (`selection_vs_cluster`),
 Resultado real (2026-09-24): **NO EVIDENCE OF MARKET EDGE** — ver
 `docs/ITERATION_4_REPORT.md`.
 
+## 10b. Iteração 5 — evidência Superbet por mercado (`flywheel/`, `docs/DATA_FLYWHEEL.md`)
+
+A validação deixa de ser "o modelo vs o mercado" e passa a ser **"o que o dataset
+próprio da Superbet permite afirmar, por mercado"**:
+
+- **Dataset**: `raw_superbet_snapshot` / `superbet_normalized_v1` append-only com
+  alvos T-48h…T-5m + `LAST_PRE_KO` (sem interpolação); cobertura por alvo e
+  mercado reportada como está (2,3 % em 7 d no fecho — o app é novo).
+- **Liquidação por mercado** (`superbet_settlement_v1`): `WON/LOST/VOID`,
+  `UNSETTLED_DATA_MISSING` (nunca derrota por falta de estatística),
+  `UNSUPPORTED` (jogador). MARKET DATA COVERAGE mostra quantos jogos com preço
+  têm liquidação.
+- **Métricas descritivas**, todas com N mínimo 30 e bootstrap por evento:
+  Margin Lab (overround por faixa × alvo × linha), eficiência de preço por T
+  (Brier da fair Superbet), CLV V2 (fair_T − fair_close), STEAM/DRIFT/STABLE,
+  SIGNAL VS MOVEMENT (lead/lag agregado). Nada disto é chamado "edge".
+- **Maturidade por mercado** pelo N efetivo liquidado: `COLLECTING < 50 · EARLY
+  < 200 · TESTABLE < 500 · MATURE ≥ 500`; confiança `INSUFFICIENT/D/C/B/A`.
+- **Hipóteses pré-registadas** (`experiment_registry`, 8 no fecho) com
+  `confirmation_start`; só dados posteriores contam; **BH-FDR q 0,10**
+  obrigatório; `SUPPORTED / NOT_SUPPORTED / INSUFFICIENT`. Nunca "melhor
+  segmento" sem FDR.
+- **Estado no fecho (2026-09-24)**: 0 seleções liquidadas → tudo `INSUFFICIENT`;
+  overround medido (1X2 9,0 %, totais 8,0–8,2 %, 5,0–5,2 % a T-48h/T-24h,
+  escanteios 7,9 %). Números completos em [`ITERATION_5_REPORT.md`](ITERATION_5_REPORT.md).
+
 ## 11. Como rodar
 
 ```bash
@@ -255,7 +281,7 @@ curl 127.0.0.1:8765/validation/governance
 curl -X POST 127.0.0.1:8765/validation/market-aware -H 'content-type: application/json' -d '{}'
 curl -X POST 127.0.0.1:8765/validation/market-aware/holdout -H 'content-type: application/json' -d '{}'
 curl 127.0.0.1:8765/validation/market-aware/latest
-# evidência Superbet
+# evidência Superbet (it. 4)
 curl '127.0.0.1:8765/validation/superbet?live=true'
 curl '127.0.0.1:8765/validation/superbet/selection?event_id=13851025&market_key=TOTAL_GOALS&selection_key=OVER&line=2.5'
 ```

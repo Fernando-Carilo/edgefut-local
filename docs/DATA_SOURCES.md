@@ -38,6 +38,9 @@ Princípios:
 | Frescor | `odds`: FRESH ≤ 10 min · AGING ≤ 45 min · STALE ≤ 6 h · depois EXPIRED. `odds_live`: 45 s / 2 min / 10 min. `events`: 20 min / 1 h / 6 h |
 | Evidência | eventos e odds atuais são reais; **não** há odds históricas da Superbet além dos snapshots que o próprio app grava |
 | Evidência acumulada (it. 4) | os snapshots do próprio app formam a **SUPERBET SHADOW VALIDATION** (`validation/superbet.py`): 37.900 snapshots pré-kickoff · 239 eventos em 26 h (2026-09-24); overround mediano 1X2 9,4 %; buckets T-15m…>24h só quando há coleta; closing em 147 eventos. Ver `docs/SUPERBET_VALIDATION.md` |
+| Evidência acumulada (it. 5) | **Collector V2** (`flywheel/collector.py`, hook em `collectors/odds.py`): cada fetch real de `/events/{id}` vira 1 linha **append-only** em `raw_superbet_snapshot` (payload zlib ou confirmação por referência) + linhas em `superbet_normalized_v1` para 15 mercados canônicos; alvos T-48h…T-5m + `LAST_PRE_KO`; **todo** `marketId` fica em `market_mapping_registry`. Em 2026-09-24 19:11 UTC: 640 raw · 381 jogos · 16 095 normalizadas · 460 marketIds (24 MAPPED / 436 OUT_OF_SCOPE / 0 UNKNOWN) · coletor HEALTHY (1 404 pedidos/h, 100 % sucesso, 0 bloqueios). Ver `docs/SUPERBET_DATASET.md` |
+| Saúde do coletor | `HEALTHY / DEGRADED / BROKEN` (`flywheel/reliability.py`) a partir de `source_log` + raw: sucesso, 429, bloqueios, 5xx, latência p50, parse rate, cobertura de mapeamento, `schema_issue_snapshots`, staleness vs cadência. Mudança de schema → quarentena + alerta `SCHEMA_CHANGED`; nunca se "adivinham" campos |
+| Downtime | `collector_gap` registado no boot/ciclo quando a última coleta dista > max(20 min, 3× cadência); lacunas nunca preenchidas |
 | Link externo | `https://superbet.bet.br/apostas/futebol/…/{eventId}` (deep link best-effort) |
 
 A página HTML da Superbet é protegida por Cloudflare (403 para clientes não
@@ -70,6 +73,12 @@ modelo é calculada durante o jogo. O que é gravado no evento
 liquidação e para o Diagnóstico — não para apostas.
 
 ### Mapeamento de mercados (marketId Superbet → mercado EdgeFut)
+
+> **Iteração 5**: a canonicalização completa (15 categorias, 24 `marketId` MAPPED, 18 motivos
+> OUT_OF_SCOPE, tratamento de UNKNOWN e decisão manual auditada) está em
+> [`MARKET_MAPPING.md`](MARKET_MAPPING.md) e é a fonte de verdade para o dataset Superbet
+> (`flywheel/markets.py`). A tabela abaixo é o mapeamento **legado** de `providers/superbet`
+> usado pelo pipeline de análise/recomendação (`odds_snapshot`), mantido por compatibilidade.
 
 | marketId | Nome Superbet | Mercado EdgeFut | Observação |
 |---|---|---|---|
