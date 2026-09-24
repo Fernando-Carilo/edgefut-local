@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -44,11 +44,18 @@ from ..models.bivariate_poisson import bivariate_output, fit_bivariate_poisson
 from ..models.dixon_coles import dixon_coles_output, fit_dixon_coles
 from ..models.elo import HOME_ADV_CLUB, HOME_ADV_NATIONAL, EloTable, elo_probabilities, update_elo
 from ..models.ensemble import weights_from_scores
-from ..models.poisson import poisson_model
 from ..models.international_strength import fit_international, international_output, tournament_type
+from ..models.poisson import poisson_model
 from ..models.strength_v2 import fit_strength_v2, strength_v2_output
 from ..odds.implied import remove_margin
-from .bootstrap import bootstrap_ci, lift_pct, model_significance, paired_bootstrap_diff, roi_stat, sample_quality
+from .bootstrap import (
+    bootstrap_ci,
+    lift_pct,
+    model_significance,
+    paired_bootstrap_diff,
+    roi_stat,
+    sample_quality,
+)
 
 log = logging.getLogger(__name__)
 
@@ -379,7 +386,7 @@ def _bets_for(pred: _Pred, model: str) -> list[_Bet]:
     return bets
 
 
-def _frame_row(code: str, w_idx: int, r, mid: int, neutral: bool, group: str | None, odds, odds_ou, close, close_ou, outs: dict, wm: "_WindowModels", season_start: pd.Timestamp | None) -> dict:
+def _frame_row(code: str, w_idx: int, r, mid: int, neutral: bool, group: str | None, odds, odds_ou, close, close_ou, outs: dict, wm: _WindowModels, season_start: pd.Timestamp | None) -> dict:
     """Uma linha por partida com TUDO o que existia em T (features, modelos, mercado) + resultado.
 
     Closing odds entram como colunas separadas `close_*` apenas para CLV — o teste

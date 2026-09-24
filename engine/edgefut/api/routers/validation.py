@@ -22,6 +22,21 @@ from ...scheduler.jobs import run_in_background
 from ...validation.bootstrap import sample_quality, sample_thresholds
 from ...validation.drift import check_drift, latest_drift
 from ...validation.governance import CONSENSUS_KEYS, current_champion, evaluate_promotion, promote
+from ...validation.market_aware import (
+    ABLATION,
+    CHALLENGER_VERSIONS,
+    FEATURE_GROUPS,
+    FORBIDDEN_COLUMNS,
+    MarketAwareRequest,
+    frame_version,
+    freeze,
+    load_active_artifact,
+    load_artifact,
+    load_frame,
+    run_discovery,
+    run_holdout,
+    save_artifact,
+)
 from ...validation.replay import BASELINES, MODEL_LABELS, MODELS, ReplayRequest, run_replay
 from ...validation.shadow import daily_report, latest_report
 
@@ -204,6 +219,151 @@ def governance(session: Session = Depends(get_session)):
             "ROI NÃO é critério de promoção",
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# iteração 4 — market-aware (discovery → freeze → holdout)
+# ---------------------------------------------------------------------------
+class MarketAwareBody(BaseModel):
+    frame_path: str | None = None          # default: frame do último replay de clubes
+    base_model: str = "ensemble"
+    markets: list[str] = Field(default_factory=lambda: ["1X2", "OU25"])
+    test_window_days: int = Field(90, ge=30, le=180)
+    validation_days: int = Field(180, ge=60, le=365)
+    min_train: int = Field(1000, ge=200)
+    holdout_days: int = Field(240, ge=60, le=730)
+    ablation: bool = True
+
+
+class HoldoutBody(BaseModel):
+    run_id: int | None = None   # discovery run; default: o último
+    force: bool = False         # repetir holdout para o mesmo (config_hash, dataset_version) — registrado como REPETIDO
+
+
+def _latest_frame_path(session: Session) -> str | None:
+    for r in session.execute(select(ValidationRun).where(ValidationRun.kind == "replay").order_by(ValidationRun.created_at.desc()).limit(30)).scalars():
+        fr = (r.summary or {}).get("frame")
+        if fr and fr.get("path") and not (r.summary or {}).get("international"):
+            return fr["path"]
+    return None
+
+
+def _market_aware_job(body: MarketAwareBody, frame_path: str, cid: str) -> None:
+    try:
+        req = MarketAwareRequest(frame_path=frame_path, base_model=body.base_model, markets=tuple(body.markets), test_window_days=body.test_window_days,
+                                 validation_days=body.validation_days, min_train=body.min_train, holdout_days=body.holdout_days, ablation=body.ablation)
+        frame = load_frame(frame_path)
+        version = frame_version(frame_path)
+        rep = run_discovery(frame, req, dataset_version=version)
+        artifact = freeze(rep, frame, req)
+        path = save_artifact(artifact, activate=True)
+        summary = {
+            "config_hash": rep["config_hash"], "dataset_version": version, "frame_path": frame_path, "model_hash": artifact["model_hash"], "artifact_path": path,
+            "verdict": rep["verdict"], "classification": rep["classification"], "holdout_start": rep["holdout_start"], "holdout_rows": rep["holdout_rows"],
+            "discovery_rows": rep["discovery_rows"], "n": {m: (ev.get("n") or 0) for m, ev in rep["markets"].items()},
+            "ranking": {m: ev.get("ranking_brier") for m, ev in rep["markets"].items()},
+        }
+        with session_scope() as s:
+            s.add(ValidationRun(kind="market_aware", correlation_id=cid, request=req.to_dict(), summary=summary, detail=rep, duration_ms=rep.get("duration_ms")))
+        log.info("market-aware discovery concluído (%s): %s", cid, rep["verdict"])
+    except Exception as exc:  # noqa: BLE001
+        log.exception("market-aware falhou: %s", exc)
+        with session_scope() as s:
+            s.add(ValidationRun(kind="market_aware", correlation_id=cid, request=body.model_dump(mode="json"), summary={"error": str(exc)}))
+    finally:
+        _running.discard("market_aware")
+
+
+@router.post("/market-aware")
+def start_market_aware(body: MarketAwareBody, session: Session = Depends(get_session)):
+    """Fase DISCOVERY + freeze automático (o holdout é uma ação separada e única)."""
+    if "market_aware" in _running:
+        return {"ok": True, "skipped": True, "reason": "market-aware já em execução"}
+    frame_path = body.frame_path or _latest_frame_path(session)
+    if not frame_path:
+        raise HTTPException(409, "nenhum frame de replay disponível — rode o replay de clubes primeiro (gera o frame por partida)")
+    _running.add("market_aware")
+    cid = new_correlation_id("market-aware")
+    run_in_background(_market_aware_job, body, frame_path, cid)
+    return {"ok": True, "started": True, "correlation_id": cid, "background": True, "frame_path": frame_path}
+
+
+def _holdout_for(session: Session, config_hash: str, dataset_version: str) -> list[ValidationRun]:
+    rows = session.execute(select(ValidationRun).where(ValidationRun.kind == "market_aware_holdout").order_by(ValidationRun.created_at.desc()).limit(50)).scalars().all()
+    return [r for r in rows if (r.summary or {}).get("config_hash") == config_hash and (r.summary or {}).get("dataset_version") == dataset_version and not (r.summary or {}).get("error")]
+
+
+@router.get("/market-aware/latest")
+def market_aware_latest(session: Session = Depends(get_session)):
+    disc = None
+    for r in session.execute(select(ValidationRun).where(ValidationRun.kind == "market_aware").order_by(ValidationRun.created_at.desc()).limit(10)).scalars():
+        if r.detail:
+            disc = r
+            break
+    out: dict = {"running": "market_aware" in _running, "holdout_running": "market_aware_holdout" in _running,
+                 "meta": {"challengers": CHALLENGER_VERSIONS, "feature_groups": list(FEATURE_GROUPS), "forbidden": list(FORBIDDEN_COLUMNS), "ablation": {k: list(v) for k, v in ABLATION.items()}},
+                 "frame_available": _latest_frame_path(session) is not None}
+    if disc is None:
+        return {**out, "discovery": None, "holdout": None}
+    holds = _holdout_for(session, disc.summary["config_hash"], disc.summary["dataset_version"])
+    primary = next((h for h in reversed(holds) if not (h.summary or {}).get("repeated")), None)  # o PRIMEIRO holdout é o que conta
+    out["discovery"] = {"id": disc.id, "created_at": disc.created_at, "summary": disc.summary, "detail": disc.detail}
+    out["holdout"] = {"id": primary.id, "created_at": primary.created_at, "summary": primary.summary, "detail": primary.detail} if primary else None
+    out["holdout_repeats"] = len([h for h in holds if (h.summary or {}).get("repeated")])
+    out["holdout_consumed"] = primary is not None
+    active = load_active_artifact()
+    out["active_artifact"] = {k: active.get(k) for k in ("model_hash", "config_hash", "dataset_version", "frozen_at", "holdout_start", "base_model")} | {
+        "markets": {m: {"alpha": s["alpha"], "selected": s["selected"], "train_rows": s["train_rows"], "coefficients": s["coefficients"]} for m, s in active["markets"].items()}} if active else None
+    return out
+
+
+@router.post("/market-aware/holdout")
+def start_holdout(body: HoldoutBody, session: Session = Depends(get_session)):
+    """Fase CONFIRMATION: avalia o artefato congelado no holdout. Uma vez por (config_hash, dataset_version);
+    repetir exige `force` e fica marcado como REPETIDO (não conta como confirmação)."""
+    if "market_aware_holdout" in _running:
+        return {"ok": True, "skipped": True, "reason": "holdout já em execução"}
+    disc = session.get(ValidationRun, body.run_id) if body.run_id else None
+    if disc is None:
+        for r in session.execute(select(ValidationRun).where(ValidationRun.kind == "market_aware").order_by(ValidationRun.created_at.desc()).limit(10)).scalars():
+            if r.detail:
+                disc = r
+                break
+    if disc is None or not disc.detail or not (disc.summary or {}).get("artifact_path"):
+        raise HTTPException(409, "nenhum discovery market-aware com artefato congelado")
+    summ = disc.summary
+    previous = _holdout_for(session, summ["config_hash"], summ["dataset_version"])
+    if previous and not body.force:
+        raise HTTPException(409, f"holdout já executado para config {summ['config_hash']} / dataset {summ['dataset_version']} (run {previous[-1].id}). Repetir exige force=true e não conta como confirmação.")
+    _running.add("market_aware_holdout")
+    cid = new_correlation_id("holdout")
+    repeated = bool(previous)
+    disc_id, disc_req = disc.id, dict(disc.request or {})
+
+    def _job() -> None:
+        try:
+            artifact = load_artifact(summ["artifact_path"])
+            frame = load_frame(summ["frame_path"])
+            if frame_version(summ["frame_path"]) != summ["dataset_version"]:
+                raise RuntimeError("o frame em disco mudou desde o discovery (dataset_version diferente) — holdout inválido")
+            req = MarketAwareRequest(**{k: (tuple(v) if isinstance(v, list) else v) for k, v in disc_req.items()})
+            rep = run_holdout(artifact, frame, req)
+            rep["repeated"] = repeated
+            with session_scope() as s:
+                s.add(ValidationRun(kind="market_aware_holdout", correlation_id=cid, request={"discovery_run_id": disc_id, "force": body.force},
+                                    summary={"config_hash": summ["config_hash"], "dataset_version": summ["dataset_version"], "model_hash": artifact["model_hash"], "repeated": repeated,
+                                             "verdict": rep["verdict"], "holdout_rows": rep["holdout_rows"], "run_timestamp": rep["run_timestamp"],
+                                             "ranking": {m: ev.get("ranking_brier") for m, ev in rep["markets"].items()}},
+                                    detail=rep, duration_ms=rep.get("duration_ms")))
+        except Exception as exc:  # noqa: BLE001
+            log.exception("holdout falhou: %s", exc)
+            with session_scope() as s:
+                s.add(ValidationRun(kind="market_aware_holdout", correlation_id=cid, request={"discovery_run_id": disc_id}, summary={"error": str(exc), "config_hash": summ.get("config_hash"), "dataset_version": summ.get("dataset_version"), "repeated": True}))
+        finally:
+            _running.discard("market_aware_holdout")
+
+    run_in_background(_job)
+    return {"ok": True, "started": True, "correlation_id": cid, "background": True, "repeated": repeated}
 
 
 @router.post("/governance/promote")

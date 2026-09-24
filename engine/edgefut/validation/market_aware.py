@@ -33,10 +33,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -123,9 +123,7 @@ def _logit(p: np.ndarray) -> np.ndarray:
 
 def prepare(df: pd.DataFrame, market: str, base_model: str) -> pd.DataFrame:
     """Linhas utilizáveis para o mercado: precisam de preço (mercado) e de probabilidade do modelo base."""
-    for c in FORBIDDEN_COLUMNS:
-        # colunas de fechamento continuam no frame para CLV, mas nunca viram feature
-        pass
+    # colunas de fechamento (FORBIDDEN_COLUMNS) continuam no frame para CLV, mas nunca viram feature
     d = df.copy()
     d["date"] = pd.to_datetime(d["date"])
     if market == "1X2":
@@ -317,7 +315,6 @@ def _ll_rows(P: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 
 def _ece(P: np.ndarray, y: np.ndarray, bins: int = 10) -> float | None:
-    K = P.shape[1]
     probs = P.ravel()
     outs = np.zeros_like(P)
     outs[np.arange(len(y)), y] = 1.0
@@ -827,8 +824,52 @@ def run_holdout(artifact: dict, frame: pd.DataFrame, req: MarketAwareRequest) ->
     return report
 
 
+# ---------------------------------------------------------------------------
+# artefatos congelados em disco (data/processed/market_aware/)
+# ---------------------------------------------------------------------------
+def artifact_dir():
+    from ..core.paths import get_paths
+
+    d = get_paths().processed / "market_aware"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_artifact(artifact: dict, *, activate: bool = True) -> str:
+    """Grava `frozen_<config>_<dataset>_<model>.json` e, se `activate`, aponta `active.json` para ele.
+    O artefato ativo é o que o pipeline usa para a probabilidade híbrida (§36) — nunca é reajustado."""
+    d = artifact_dir()
+    ds = artifact["dataset_version"].split(":")[-1]
+    path = d / f"frozen_{artifact['config_hash']}_{ds}_{artifact['model_hash']}.json"
+    path.write_text(json.dumps(artifact, default=str), encoding="utf-8")
+    if activate:
+        (d / "active.json").write_text(json.dumps({"path": str(path), "model_hash": artifact["model_hash"], "config_hash": artifact["config_hash"],
+                                                    "dataset_version": artifact["dataset_version"], "activated_at": datetime.utcnow().isoformat()}), encoding="utf-8")
+        load_active_artifact.cache_clear()
+    return str(path)
+
+
+def load_artifact(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@lru_cache(maxsize=1)
+def load_active_artifact() -> dict | None:
+    ptr = artifact_dir() / "active.json"
+    if not ptr.exists():
+        return None
+    try:
+        meta = json.loads(ptr.read_text(encoding="utf-8"))
+        return load_artifact(meta["path"])
+    except (OSError, ValueError, KeyError) as exc:
+        log.warning("artefato market-aware ativo ilegível: %s", exc)
+        return None
+
+
 __all__ = [
     "MarketAwareRequest", "prepare", "blend", "fit_multinomial", "nested_walk_forward", "evaluate_oos", "run_discovery", "freeze", "run_holdout",
-    "predict_frozen", "load_frame", "frame_version", "disagreement_buckets", "contrarian_test", "segment_analysis",
+    "predict_frozen", "promotion_check", "load_frame", "frame_version", "disagreement_buckets", "contrarian_test", "segment_analysis",
+    "save_artifact", "load_artifact", "load_active_artifact", "artifact_dir",
     "CHALLENGERS", "CHALLENGER_VERSIONS", "FEATURE_GROUPS", "FORBIDDEN_COLUMNS", "ABLATION", "BLEND", "LOGISTIC", "RESIDUAL",
 ]
