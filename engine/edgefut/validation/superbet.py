@@ -119,9 +119,10 @@ def add_fair_probabilities(df: pd.DataFrame) -> pd.DataFrame:
     need = df["market_key"].map(COMPLETE_MARKET)
     df["complete"] = (df["n_sel"] == need) & (g["selection_key"].transform("count") == need)
     # soma das probabilidades verdadeiras de um mercado completo: 1, exceto dupla chance (cada resultado
-    # aparece em duas seleções → 2). Sem isto a margem da dupla chance sairia como ~118 %.
+    # aparece em duas seleções → 2). Sem isto a margem da dupla chance sairia como ~118 %. A margem é
+    # expressa relativa ao book total para ser comparável entre mercados.
     book_total = df["market_key"].map(BOOK_TOTAL).fillna(1.0)
-    df["overround"] = np.where(df["complete"], df["implied_sum"] - book_total, np.nan)
+    df["overround"] = np.where(df["complete"], df["implied_sum"] / book_total - 1.0, np.nan)
     df["fair_probability"] = np.where(df["complete"], df["implied"] / df["implied_sum"] * book_total, np.nan)
     return df
 
