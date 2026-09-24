@@ -1419,22 +1419,26 @@ export interface SegmentRow {
   [k: string]: unknown;
 }
 
+/** Um mercado num relatório market-aware. Discovery traz `alpha`/`ablation`/`by_dataset`/`windows_log`;
+ *  o holdout congelado traz `alpha_frozen`/`selected` e só o que pode ser medido sem reajuste. */
 export interface MarketAwareMarketReport {
-  market: string;
+  market?: string;
   n: number;
-  windows: number;
+  windows?: number;
   effective_sample: EffectiveSample;
   overall: Record<string, MarketAwareModelMetrics>;
   vs_market: Record<string, MarketAwareVsRow>;
-  vs_edgefut: Record<string, MarketAwareVsRow>;
+  vs_edgefut?: Record<string, MarketAwareVsRow>;
   ranking_brier: [string, number][];
-  alpha: { chosen_per_window: Record<string, number>; mean: number; share_alpha_1: number; note: string } | null;
-  ablation: { variant: string; features: string[]; brier: number; log_loss: number; delta_brier_vs_market: Interval; significance: string }[];
-  disagreement_buckets: DisagreementBucket[];
-  contrarian: ContrarianTest | null;
-  segments: { challenger: string; rows: SegmentRow[]; fdr: { q: number; tested: number; survivors: string[]; adjusted: Record<string, number> }; note: string } | null;
-  by_dataset: Record<string, Record<string, number>>;
-  windows_log: { window: number; test_start: string; test_end: string; train: number; validation?: number; test: number; alpha: number | null; [k: string]: unknown }[];
+  alpha?: { chosen_per_window: Record<string, number>; mean: number; share_alpha_1: number; note: string } | null;
+  alpha_frozen?: number | null;
+  selected?: string;
+  ablation?: { variant: string; features: string[]; brier: number; log_loss: number; delta_brier_vs_market: Interval; significance: string }[];
+  disagreement_buckets?: DisagreementBucket[];
+  contrarian?: ContrarianTest | null;
+  segments?: { challenger: string; rows: SegmentRow[]; fdr: { q: number; tested: number; survivors: string[]; adjusted: Record<string, number> }; note: string } | null;
+  by_dataset?: Record<string, Record<string, number>>;
+  windows_log?: { window: number; test_start: string; test_end: string; train: number; validation?: number; test: number; alpha: number | null; [k: string]: unknown }[];
 }
 
 export interface MarketAwareReport {

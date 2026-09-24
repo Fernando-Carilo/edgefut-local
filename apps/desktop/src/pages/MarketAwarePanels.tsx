@@ -14,9 +14,8 @@ import { Lock, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
 import { Card, Empty, ErrorBox, KV, Loading, SectionTitle, Segmented, Stat } from "@/components/ui";
+import { IntervalText, SampleChip, SigChip } from "@/components/ValidationChips";
 import { api } from "@/lib/api";
-
-import { IntervalText, SampleChip, SigChip } from "./ValidationPage";
 
 const CH_LABEL: Record<string, string> = {
   market: "Mercado (justa)",
@@ -132,7 +131,7 @@ export function MarketAwareReportView({ rep, run, repeats, compact }: { rep: Mar
                   <span className={clsx("w-44 shrink-0 font-semibold", c.pass ? "text-success" : "text-ink-2")}>{label(c.challenger)}</span>
                   {Object.entries(c.criteria).map(([k, cr]) => (
                     <span key={k} className={clsx("chip", cr.pass ? "bg-success-50 text-success" : "bg-danger-50 text-danger")} title={`${k}: ${cr.value ?? "—"}`}>
-                      {k.replace(/_/g, " ")} {cr.value !== null && cr.value !== undefined ? `(${typeof cr.value === "number" ? cr.value.toFixed(4) : cr.value})` : ""}
+                      {k.replace(/_/g, " ")} {cr.value !== null && cr.value !== undefined ? `(${typeof cr.value === "number" ? (k === "effective_n" ? int(cr.value) : cr.value.toFixed(4)) : cr.value})` : ""}
                     </span>
                   ))}
                 </div>
@@ -164,17 +163,22 @@ export function MarketAwareReportView({ rep, run, repeats, compact }: { rep: Mar
 
 function MarketBlock({ market, mr, compact }: { market: string; mr: MarketAwareMarketReport; compact?: boolean }) {
   const [showAbl, setShowAbl] = useState(false);
-  const rows = mr.ranking_brier.filter(([k]) => showAbl || !k.startsWith("abl_"));
+  const rows = (mr.ranking_brier ?? []).filter(([k]) => showAbl || !k.startsWith("abl_"));
   const eff = mr.effective_sample;
+  const hasAbl = (mr.ranking_brier ?? []).some(([k]) => k.startsWith("abl_"));
+  const byDataset = mr.by_dataset ?? {};
+  const buckets = mr.disagreement_buckets ?? [];
   return (
     <Card>
       <SectionTitle
         title={`${market === "OU25" ? "Over/Under 2,5" : market} — Brier OOS por modelo (quanto menor, melhor)`}
-        subtitle={`Raw N ${int(eff.raw_n)} · Effective N ${int(eff.effective_n)} (ρ=${eff.rho}, ${int(eff.clusters)} clusters) · ${mr.windows} janelas temporais · IC 95% por bootstrap de cluster · Δ vs mercado: negativo = melhor que o mercado.`}
+        subtitle={`Raw N ${int(eff.raw_n)} · Effective N ${int(eff.effective_n)} (ρ=${eff.rho}, ${int(eff.clusters)} clusters)${mr.windows ? ` · ${mr.windows} janelas temporais` : ""}${mr.alpha_frozen !== undefined ? ` · artefato congelado: ${mr.selected ?? "—"} (α=${mr.alpha_frozen ?? "—"})` : ""} · IC 95% por bootstrap de cluster · Δ vs mercado: negativo = melhor que o mercado.`}
         right={
-          <button className="btn-ghost text-xs" onClick={() => setShowAbl((s) => !s)}>
-            {showAbl ? "Ocultar ablação" : "Mostrar ablação (§14)"}
-          </button>
+          hasAbl ? (
+            <button className="btn-ghost text-xs" onClick={() => setShowAbl((s) => !s)}>
+              {showAbl ? "Ocultar ablação" : "Mostrar ablação (§14)"}
+            </button>
+          ) : undefined
         }
       />
       <table className="w-full text-sm">
@@ -241,7 +245,7 @@ function MarketBlock({ market, mr, compact }: { market: string; mr: MarketAwareM
                 </tr>
               </thead>
               <tbody>
-                {mr.disagreement_buckets.map((b) => (
+                {buckets.map((b) => (
                   <tr key={b.bucket} className="border-t border-line/60">
                     <td className="py-1">{b.bucket}</td>
                     <td className="text-right tabular-nums">{int(b.n)}</td>
@@ -286,7 +290,7 @@ function MarketBlock({ market, mr, compact }: { market: string; mr: MarketAwareM
         </div>
       )}
 
-      {!compact && mr.segments && (
+      {!compact && mr.segments && mr.segments.rows && (
         <div className="mt-4">
           <SectionTitle title={`Segmentos (exploratório, challenger ${label(mr.segments.challenger)}) — FDR Benjamini-Hochberg q=${mr.segments.fdr.q}`} subtitle={`${mr.segments.fdr.tested} testes · sobreviventes ao FDR: ${mr.segments.fdr.survivors.length ? mr.segments.fdr.survivors.join(", ") : "nenhum"}. ${mr.segments.note}`} />
           <table className="w-full text-xs">
@@ -314,7 +318,7 @@ function MarketBlock({ market, mr, compact }: { market: string; mr: MarketAwareM
                   <td className="text-right"><IntervalText v={r.delta_ci} digits={4} signed /></td>
                   <td className="text-right tabular-nums">{r.p_value?.toFixed(3) ?? "—"}</td>
                   <td className="text-right tabular-nums">{mr.segments!.fdr.adjusted[r.segment]?.toFixed(3) ?? "—"}</td>
-                  <td>{(r.verdict as string | undefined) ?? "—"}</td>
+                  <td>{(r.verdict as string | undefined) ?? (r.winner as string | undefined) ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -322,7 +326,7 @@ function MarketBlock({ market, mr, compact }: { market: string; mr: MarketAwareM
         </div>
       )}
 
-      {!compact && Object.keys(mr.by_dataset).length > 0 && (
+      {!compact && Object.keys(byDataset).length > 0 && (
         <div className="mt-4">
           <SectionTitle title="Por competição — Brier" subtitle="Mercado vs EdgeFut vs challengers por dataset. Sem seleção pós-hoc do melhor nicho." />
           <table className="w-full text-xs">
@@ -338,7 +342,7 @@ function MarketBlock({ market, mr, compact }: { market: string; mr: MarketAwareM
               </tr>
             </thead>
             <tbody>
-              {Object.entries(mr.by_dataset).map(([ds, r]) => (
+              {Object.entries(byDataset).map(([ds, r]) => (
                 <tr key={ds} className="border-t border-line/60">
                   <td className="py-1 font-mono">{ds}</td>
                   <td className="text-right tabular-nums">{int(r.n)}</td>

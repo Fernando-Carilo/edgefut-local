@@ -40,6 +40,8 @@ COMPLETE_MARKET = {
     "1X2": 3, "DOUBLE_CHANCE": 3, "DRAW_NO_BET": 2, "TOTAL_GOALS": 2, "BTTS": 2, "TEAM_TOTAL_HOME": 2, "TEAM_TOTAL_AWAY": 2,
     "HANDICAP": 2, "ASIAN_HANDICAP": 2, "TOTAL_CORNERS": 2, "TOTAL_CARDS": 2,
 }
+# soma das probabilidades justas de um mercado completo: dupla chance cobre cada resultado duas vezes → 2.0
+BOOK_TOTAL = {"DOUBLE_CHANCE": 2.0}
 FAMILY = {
     "1X2": "1X2", "DOUBLE_CHANCE": "1X2", "DRAW_NO_BET": "1X2", "HANDICAP": "1X2", "ASIAN_HANDICAP": "1X2",
     "TOTAL_GOALS": "OU", "TEAM_TOTAL_HOME": "OU", "TEAM_TOTAL_AWAY": "OU", "BTTS": "BTTS", "TOTAL_CORNERS": "CORNERS", "TOTAL_CARDS": "CARDS",
@@ -116,8 +118,11 @@ def add_fair_probabilities(df: pd.DataFrame) -> pd.DataFrame:
     df["implied_sum"] = g["implied"].transform("sum")
     need = df["market_key"].map(COMPLETE_MARKET)
     df["complete"] = (df["n_sel"] == need) & (g["selection_key"].transform("count") == need)
-    df["overround"] = np.where(df["complete"], df["implied_sum"] - 1.0, np.nan)
-    df["fair_probability"] = np.where(df["complete"], df["implied"] / df["implied_sum"], np.nan)
+    # soma das probabilidades verdadeiras de um mercado completo: 1, exceto dupla chance (cada resultado
+    # aparece em duas seleções → 2). Sem isto a margem da dupla chance sairia como ~118 %.
+    book_total = df["market_key"].map(BOOK_TOTAL).fillna(1.0)
+    df["overround"] = np.where(df["complete"], df["implied_sum"] - book_total, np.nan)
+    df["fair_probability"] = np.where(df["complete"], df["implied"] / df["implied_sum"] * book_total, np.nan)
     return df
 
 

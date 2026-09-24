@@ -90,6 +90,17 @@ def why_not(rec: Recommendation, ctx: WhyContext, gate: QualityGate | None) -> l
             out.append(f"Prova out-of-sample negativa neste mercado (N={o.get('n')}, ROI IC 95% [{o.get('roi_low')}, {o.get('roi_high')}]): o edge existe no papel, mas o histórico não confirma.")
         elif r == "EXTREME_PROBABILITY":
             out.append(f"Probabilidade extrema ({rec.model_prob:.0%}) sem amostra forte que a sustente: a probabilidade não foi truncada, mas a confiança foi penalizada.")
+        elif r == "EDGE_NOT_ROBUST":
+            q = rec.required_edge or {}
+            c = q.get("components_pp") or {}
+            out.append(
+                f"Edge bruto {q.get('edge_raw_pp', rec.edge_pp):+.1f} pp abaixo do required edge {q.get('required_pp', 0):.1f} pp "
+                f"(margem {c.get('margin', 0):.1f} + incerteza {c.get('uncertainty', 0):.1f} + calibração {c.get('calibration', 0):.1f} + amostra {c.get('sample', 0):.1f} + mercado {c.get('market_efficiency', 0):.1f}): "
+                f"ajustado por incerteza fica em {q.get('edge_adjusted_pp', 0):+.1f} pp. Divergência do modelo não é edge."
+            )
+        elif r == "RESIDUAL_EDGE_LOW":
+            m = rec.market_aware or {}
+            out.append(f"Residual edge validado (híbrido − mercado) de {m.get('residual_edge_pp', 0):+.1f} pp abaixo do mínimo: o modelo market-aware confirma quase todo o preço do mercado.")
         elif r.startswith("ALTERNATIVE_OF:"):
             out.append(f"Alternativa da mesma tese que {r.split(':', 1)[1].replace('/', ' · ')} — não é uma oportunidade adicional.")
         elif r in ("STALE_DATA", "MODEL_DISAGREEMENT", "SMALL_SAMPLE", "LOW_DATA", "UNSUPPORTED_COMPETITION", "UNRELIABLE_SOURCE"):
