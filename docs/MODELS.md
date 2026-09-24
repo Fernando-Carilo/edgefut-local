@@ -40,6 +40,18 @@ OU 2,5; todos os modelos superam os baselines ingênuos de forma CONSISTENT. Em
 seleções (N 15.956, sem odds) o campeão bate o ingênuo em +18,3 % e o ELO em
 +3,3 %. Detalhes e IC em [`ITERATION_3_REPORT.md`](ITERATION_3_REPORT.md).
 
+**Resultado market-aware (iteração 4, resumo):** com o mercado como prior,
+três challengers (`market-model-blend-v1`, `market-logistic-stack-v1`,
+`market-residual-v1`) foram avaliados com CV temporal aninhada e holdout
+congelado (≥ 2026-01-23, `model_hash a5e8d42f97f764d7`). **α = 1,0 (mercado
+puro) venceu**; nenhum challenger passou `brier_better` (1X2 Δ −0,0001
+[−0,0020; +0,0017]; OU 2,5 −0,0002 [−0,0013; +0,0009]); quando o EdgeFut
+discorda ≥ 5 pp do mercado, o mercado está certo. Veredicto **NO EVIDENCE OF
+MARKET EDGE**; nenhum challenger alimenta recomendações. O único efeito no
+pipeline é o **required edge** (seção 16) e o bloco informativo MARKET vs
+EDGEFUT. Detalhes em [`MARKET_AWARE_MODELS.md`](MARKET_AWARE_MODELS.md) e
+[`ITERATION_4_REPORT.md`](ITERATION_4_REPORT.md).
+
 ## 1. Team Strength Engine (`strength-v1`)
 
 Janelas: últimos 5, 10 e 20 jogos, com peso de recência exponencial
@@ -542,3 +554,30 @@ Correlação detectada por regras sobre o mesmo evento (Over 1.5 + BTTS,
 1X2 + DNB, etc.). Quando correlacionada, a probabilidade conjunta é obtida da
 mesma simulação Monte Carlo (contando cenários onde todas as seleções vencem),
 não do produto ingênuo. Entre eventos diferentes, assume-se independência.
+
+## 16. Required edge e intervalo de incerteza (`recommendations/required_edge.py`, iteração 4)
+
+Aplicado a toda seleção 1X2 / OU 2,5 com odd Superbet, **antes** de qualquer
+estado `VALUE`; só adiciona uma barreira, nunca relaxa o Quality Gate.
+
+- **Intervalo de incerteza**: meia-largura = √(spread² + ECE² + amostra²),
+  com spread = dispersão entre os modelos do consenso, ECE = calibração do
+  campeão no replay (0,02 se desconhecida), amostra = 0,5·√(p(1−p)/n_min).
+- **Edge bruto** = p_modelo − p_justa (Superbet, margem removida).
+  **Edge ajustado** = bruto − meia-largura.
+- **Required edge** = margem da casa (overround do mercado, teto 15 %) +
+  meia-largura + 0,5 pp se sem calibrador confiável + 0,5 pp se o mercado não
+  tem prova OOS suficiente + 1,0 pp se o veredicto market-aware do mercado é
+  `NO EVIDENCE OF MARKET EDGE`; nunca abaixo de `min_edge_pp`.
+- `robust = bruto ≥ required`; caso contrário razão `EDGE_NOT_ROBUST` e estado
+  no máximo `OBSERVATION`. Exemplo do spec: bruto +5,2 pp, margem 5,1 %,
+  incerteza 2,4 pp → required 7,8 pp → OBSERVATION (teste).
+- **MODEL DISAGREEMENT** (EdgeFut − Superbet) é sempre mostrado; **RESIDUAL
+  EDGE** (híbrido congelado − Superbet) só é chamado assim se o mercado tiver
+  veredicto positivo no holdout — hoje nenhum tem, então aparece `NÃO
+  VALIDADO`.
+
+Versões dos challengers: `market-model-blend-v1`, `market-logistic-stack-v1`,
+`market-residual-v1` (`validation/market_aware.py`), registradas no artefato
+congelado (`model_hash`), não no `model_registry` de produção — nenhum deles
+está em produção.

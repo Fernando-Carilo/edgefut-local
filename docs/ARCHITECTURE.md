@@ -84,14 +84,20 @@ edgefut-local/
 │   │   ├── simulation/        # Monte Carlo
 │   │   ├── odds/              # implied (Shin + multiplicativa), movimento, closing line (só CLV)
 │   │   ├── recommendations/   # edge, confiança v2, opportunity v3, gate, estados, pricing (price target),
-│   │   │                      # correlation (clusters/exposição), why, NO BET, múltiplas
-│   │   ├── validation/        # replay (baselines), bootstrap/sample quality, decay walk-forward, shadow,
-│   │   │                      # drift, governance (champion/challenger), model_health
+│   │   │                      # correlation (clusters/exposição), why, NO BET, múltiplas,
+│   │   │                      # required_edge (incerteza + required edge, it. 4)
+│   │   ├── validation/        # replay (baselines, frame Parquet versionado, HistoricalQualityGate),
+│   │   │                      # bootstrap (IC, cluster bootstrap, N efetivo, BH-FDR, decomposição de Brier),
+│   │   │                      # decay walk-forward, shadow (v2: Superbet fair × EdgeFut × híbrido),
+│   │   │                      # drift, governance (champion/challenger + promoção market-aware),
+│   │   │                      # model_health (V2), market_aware (blend/stack/residual, frozen holdout),
+│   │   │                      # superbet (SuperbetEvidenceEngine)
 │   │   ├── explanations/      # templates PT-BR, Edge AI (grounded), Ollama opcional
 │   │   ├── backtesting/       # Lab (as_of), settlement, reconciliação, métricas, performance por grupo/cluster/estado
 │   │   ├── alerts/            # alertas locais (tabela alert) + watchlist de preço
 │   │   ├── scheduler/         # APScheduler V2: 14 jobs com job_run + correlation id
-│   │   └── analysis/          # orquestração do pipeline por evento (cache por versão), changes (WHY MODEL CHANGED)
+│   │   └── analysis/          # orquestração do pipeline por evento (cache por versão), changes (WHY MODEL CHANGED),
+│   │                          # market_view (MARKET vs EDGEFUT com híbrido congelado)
 │   └── tests/
 ├── packages/
 │   ├── contracts/             # tipos TypeScript espelhando os schemas Pydantic
@@ -167,6 +173,17 @@ final na janela de 12 min pré-jogo e, passado o kickoff, fixa a última odd
 conhecida em `closing_line`. É usada **somente** para CLV — nunca entra no
 modelo nem na recomendação (que usa a odd do momento da análise, gravada no
 snapshot).
+
+Iteração 4: a liquidação do shadow (`reconcile`) anexa `closing_odd` a cada
+`shadow_prediction`, e um **backfill** (`validation/superbet.py`) recupera o
+closing de eventos já iniciados a partir do último `odds_snapshot` pré-kickoff.
+Os snapshots são a camada **raw append-only**; o relatório
+`superbet-shadow-v1` (`GET /validation/superbet`) é a camada *processed*
+versionada, com buckets de tempo até o kickoff derivados de `collected_at −
+kickoff_utc` — só existem quando houve coleta. A migração v4 acrescenta ao
+shadow `hybrid_prob`, `residual_edge_pp`, `required_edge_pp`,
+`adjusted_edge_pp` e `minutes_to_kickoff`. Nos challengers market-aware, as
+colunas de closing são proibidas por teste (`FORBIDDEN_COLUMNS`).
 
 ### 4.4 Frescor e conflitos
 

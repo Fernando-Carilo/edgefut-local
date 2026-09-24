@@ -113,3 +113,30 @@ Rollback = promover o consenso anterior, com motivo.
 
 Nunca: fixar pesos à mão, escolher decay "no olho", promover por ROI, relaxar
 limiar para o Radar encher, ou apagar uma versão que algum snapshot referencie.
+
+## 8. Promoção market-aware (iteração 4, `governance.evaluate_market_aware_promotion`)
+
+Challengers que usam o preço do mercado como prior (`market-model-blend-v1`,
+`market-logistic-stack-v1`, `market-residual-v1`) têm uma regra própria e
+mais dura (§29 do spec), avaliada **primeiro na descoberta e depois no
+holdout congelado**, que só roda uma vez por `config_hash + dataset_version`:
+
+| Critério | Regra |
+|---|---|
+| `brier_better` | IC 95 % (bootstrap por cluster) de Δ Brier challenger − mercado inteiramente < 0 |
+| `logloss_not_worse` | Δ LogLoss ≤ 0 |
+| `calibration_not_worse` | ECE ≤ ECE do mercado + 0,005 |
+| `stable_windows` | melhor que o mercado em ≥ 60 % das janelas |
+| `effective_n` | N efetivo ≥ 300 |
+| sem leakage | closing line nunca é feature (teste); holdout intocado pela descoberta |
+| **camada de value** | além de tudo acima, CLV Superbet ≥ 0 com IC que não exclua zero para baixo |
+
+Vereditos: `NOT EVALUATED` · `INSUFFICIENT DATA` · `NO EVIDENCE OF MARKET
+EDGE` · `CHALLENGER BEATS MARKET · CLV UNKNOWN` · `CHALLENGER BEATS MARKET ·
+CLV NEGATIVE` · `PROMOTE VALUE LAYER`. Ver o holdout **não** autoriza ajustar
+o modelo e repetir: qualquer mudança gera novo `config_hash` e exige holdout em
+período posterior.
+
+Estado em 2026-09-24: **NO EVIDENCE OF MARKET EDGE** nos dois mercados
+(1X2, OU 2,5), `MARKET EDGE STATUS = UNPROVEN`; nenhum challenger market-aware
+alimenta recomendações (`docs/ITERATION_4_REPORT.md`).

@@ -37,6 +37,7 @@ Princípios:
 | Cache TTL | eventos 10 min · odds 4 min · torneios 24h · ao vivo `poll − 5 s` |
 | Frescor | `odds`: FRESH ≤ 10 min · AGING ≤ 45 min · STALE ≤ 6 h · depois EXPIRED. `odds_live`: 45 s / 2 min / 10 min. `events`: 20 min / 1 h / 6 h |
 | Evidência | eventos e odds atuais são reais; **não** há odds históricas da Superbet além dos snapshots que o próprio app grava |
+| Evidência acumulada (it. 4) | os snapshots do próprio app formam a **SUPERBET SHADOW VALIDATION** (`validation/superbet.py`): 37.900 snapshots pré-kickoff · 239 eventos em 26 h (2026-09-24); overround mediano 1X2 9,4 %; buckets T-15m…>24h só quando há coleta; closing em 147 eventos. Ver `docs/SUPERBET_VALIDATION.md` |
 | Link externo | `https://superbet.bet.br/apostas/futebol/…/{eventId}` (deep link best-effort) |
 
 A página HTML da Superbet é protegida por Cloudflare (403 para clientes não
@@ -94,6 +95,12 @@ Superbet oferecer, o mapeamento entra aqui.
 Odds com `status != active` são descartadas.
 
 ## 2. football-data.co.uk (histórico de ligas) — `providers/historical/football_data.py`
+
+> **Classificação de evidência (it. 4): RESEARCH MARKET BENCHMARK.** As odds
+> `B365*`/`Avg*` são coletadas pelo football-data em instante não registrado
+> por partida e não são da Superbet; `PSC*` (Pinnacle closing) só serve para
+> CLV e é proibida como feature. Nada derivado destes arquivos prova
+> executabilidade — isso é papel da SUPERBET SHADOW VALIDATION acima.
 
 | Item | Valor |
 |---|---|

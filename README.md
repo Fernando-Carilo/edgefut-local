@@ -202,6 +202,28 @@ completo em [docs/ITERATION_3_REPORT.md](docs/ITERATION_3_REPORT.md).
 
 ---
 
+## Market-aware & Superbet (iteração 4) — o modelo tem informação além do preço?
+
+| Pergunta | Resposta medida |
+|---|---|
+| α do blend `p_mkt^α · p_edgefut^(1−α)` escolhido só em treino/validação | **α = 1,0 (mercado puro)** em 10/11 janelas 1X2 e 8/11 OU 2,5 → o EdgeFut não adicionou valor |
+| Challengers `market-logistic-stack-v1` e `market-residual-v1` no **holdout congelado** (≥ 2026-01-23, rodado 1×, `model_hash a5e8d42f97f764d7`) | 1X2 n 2.231: mercado Brier 0,5831 · residual 0,5829 (Δ −0,0001 [−0,0020; +0,0017], 4/8 janelas) · stack 0,5834 · EdgeFut 0,5958 (+0,0127 [+0,0072; +0,0181]). OU 2,5 n 2.230: 0,4752 · 0,4749 · 0,4749 · 0,4853. **Nenhum passa `brier_better`** |
+| Ablação (stack só com preço vs preço + features do EdgeFut) | `market_only` é a melhor variante nos dois mercados; adicionar a probabilidade do EdgeFut não melhora |
+| Divergência forte (≥ 5 pp) — quem acerta? | **O mercado**, nos 4 testes (discovery/holdout × 1X2/OU). Bucket 10+ pp holdout 1X2: mercado 0,5755 vs EdgeFut 0,6290 |
+| Segmentos após BH-FDR (q 0,10) | **0 sobreviventes** em 54 testes; os únicos p < 0,05 são vitórias do mercado |
+| Superbet (coleta própria, 26 h): overround 1X2 · viés · CLV · shadow liquidado | 9,4 % (10,7 % a T-15m) · NO BIAS DETECTED em 13 segmentos · CLV −1,3 % (314 sel., 6 ev., sem IC) · 244 seleções / 5 jogos / **N efetivo 10** → `INSUFFICIENT` |
+| Required edge (margem + incerteza + calibração + amostra + eficiência) | aplicado a toda seleção 1X2/OU 2,5; ex. Granada × Andorra OVER 2,5: bruto +11,7 pp < required 12,4 pp → `OBSERVATION` |
+| Model Health V2 | FOOTBALL MODEL `PREDICTIVE (vs naive)` · MARKET MODEL `UNPROVEN` · SUPERBET EVIDENCE `COLLECTING` · SHADOW SETTLED `INSUFFICIENT` · **MARKET EDGE UNPROVEN** |
+
+**Conclusão: NO EVIDENCE OF MARKET EDGE.** Prever futebol ≠ bater o mercado;
+o EdgeFut faz o primeiro e não o segundo. Nenhum threshold foi relaxado, o
+Radar continua com 0 VALUE e a tela diz isso. Detalhes em
+[docs/ITERATION_4_REPORT.md](docs/ITERATION_4_REPORT.md),
+[docs/MARKET_AWARE_MODELS.md](docs/MARKET_AWARE_MODELS.md) e
+[docs/SUPERBET_VALIDATION.md](docs/SUPERBET_VALIDATION.md).
+
+---
+
 ## Segurança e ética
 
 - Escuta apenas `127.0.0.1` (nunca `0.0.0.0`); CORS restrito à janela Tauri e ao Vite local.
@@ -224,6 +246,10 @@ completo em [docs/ITERATION_3_REPORT.md](docs/ITERATION_3_REPORT.md).
 - [docs/ITERATION_2_REPORT.md](docs/ITERATION_2_REPORT.md) — o que foi implementado, verificado com dados reais, limitações e riscos
 - [docs/ITERATION_3_BASELINE.md](docs/ITERATION_3_BASELINE.md) — auditoria antes da iteração 3
 - [docs/ITERATION_3_REPORT.md](docs/ITERATION_3_REPORT.md) — validação do modelo com números reais, limitações e riscos
+- [docs/ITERATION_4_BASELINE.md](docs/ITERATION_4_BASELINE.md) — auditoria antes da iteração 4 (odds históricas sem carimbo, closing nulo no shadow, N efetivo)
+- [docs/MARKET_AWARE_MODELS.md](docs/MARKET_AWARE_MODELS.md) — mercado como prior, challengers blend/stack/residual, CV temporal aninhada, holdout congelado, required edge
+- [docs/SUPERBET_VALIDATION.md](docs/SUPERBET_VALIDATION.md) — evidência Superbet: cobertura, buckets, overround, movimento, viés, Superbet fair como baseline, CLV, shadow v2
+- [docs/ITERATION_4_REPORT.md](docs/ITERATION_4_REPORT.md) — resultado: NO EVIDENCE OF MARKET EDGE, com todos os números
 
 ## Licença
 

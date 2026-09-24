@@ -64,17 +64,40 @@ automatizado e execução real (baselines em `ITERATION_2_BASELINE.md` e
 - [x] 151 testes backend, typecheck e build verdes
 - [x] documentação: `ITERATION_3_REPORT.md`, `VALIDATION.md`, `MODEL_GOVERNANCE.md`; README, ARCHITECTURE, MODELS, DATA_SOURCES atualizados
 
-## Próximos passos (após a iteração 3)
+## Iteração 4 — critérios de saída (§50) e resultado
 
-1. **Acumular shadow liquidado** (≥ 300 por mercado) para comparar o modelo
-   com as odds **da Superbet** — a única forma de saber se há mercado onde a
-   Superbet é menos eficiente que a média do football-data.
-2. **Reproduzir o Quality Gate completo no replay** (confiança, frescor,
-   qualidade, clusters) para medir se ele separa apostas boas de ruins ou só
-   reduz N.
-3. **Modelo híbrido mercado + modelo** (ex.: logística sobre `logit(p_mercado)`
-   e `logit(p_modelo)`) como challenger, avaliado pela regra de promoção — o
-   mercado é hoje o melhor preditor isolado.
+- [x] baseline auditado (`ITERATION_4_BASELINE.md`): odds football-data sem carimbo → RESEARCH MARKET BENCHMARK; `closing_odd` nulo em 100 % do shadow (corrigido); N efetivo
+- [x] mercado como prior; challengers `market-model-blend-v1` (α ∈ {0,5…1,0}), `market-logistic-stack-v1`, `market-residual-v1`; sem deep learning nem boosting
+- [x] closing line **nunca** feature/treino/recomendação — teste automatizado; só CLV
+- [x] CV temporal aninhada (validação 180 d / teste 90 d), nunca split aleatório; ablação por grupo de features
+- [x] FROZEN HOLDOUT (≥ 2026-01-23) com `model_hash a5e8d42f97f764d7`, `config_hash 6e0e8a7db0fe9119`, `dataset_version replay-frame-v1:55b9f039e3fa730c`, rodado **1×** (409 se repetido)
+- [x] bootstrap por cluster de evento, N efetivo (Raw N vs Effective N na UI), BH-FDR, decomposição de Brier, buckets de divergência, teste contrarian
+- [x] `SuperbetEvidenceEngine`: buckets T-24h…T-15m só quando existem, overround por mercado/competição/faixa/tempo, opening/rec/closing, viés, Superbet fair como baseline, CLV próprio; camadas raw append-only / `superbet-shadow-v1`
+- [x] `RequiredEdgeEngine` + intervalo de incerteza + EDGE BRUTO vs AJUSTADO; `HistoricalQualityGate` com `UNAVAILABLE_IN_REPLAY`
+- [x] shadow v2 (Superbet fair × EdgeFut × híbrido), validação OOS de grau A/B/C/D e bins do Opportunity Score; regra de promoção market-aware com CLV ≥ 0; Model Health V2
+- [x] UI: MARKET vs EDGEFUT no jogo; abas Market-Aware e Superbet; Market Efficiency Lab; Superbet Lab
+- [x] 183 testes backend, typecheck e build verdes
+- [x] **Resultado: α = 1,0 venceu; nenhum challenger passa `brier_better` no holdout (1X2 Δ −0,0001 [−0,0020; +0,0017]; OU 2,5 −0,0002 [−0,0013; +0,0009]); mercado correto nos testes contrarian; 0 segmentos sobrevivem ao FDR; Superbet N efetivo 10 → NO EVIDENCE OF MARKET EDGE.** Nenhum threshold relaxado; Model Health `WATCH`; 0 VALUE
+
+## Próximos passos (após a iteração 4)
+
+1. **Acumular shadow Superbet liquidado com closing** (≥ 30 jogos, depois ≥ 300 seleções por mercado) para que CLV, viés e Superbet-fair-vs-EdgeFut tenham IC por evento.
+2. Qualquer nova hipótese market-aware exige novo `config_hash`, nova descoberta e **holdout em período posterior a 2026-09-24**; nunca reajustar sobre o holdout já consumido.
+3. Fonte de odds históricas com carimbo (ou o acervo Superbet do próprio app, quando tiver meses) para converter o RESEARCH MARKET BENCHMARK em backtest negociável.
+4. Itens herdados da iteração 3 que continuam válidos (abaixo).
+
+## Próximos passos herdados (após a iteração 3)
+
+1. ~~Acumular shadow liquidado para comparar com a Superbet~~ — mecanismo
+   pronto na iteração 4 (Superbet fair como baseline, CLV próprio); falta só
+   tempo de coleta (ver item 1 acima).
+2. ~~Reproduzir o Quality Gate no replay~~ — feito parcialmente como
+   `HistoricalQualityGate` (edge/EV/odd, amostra, divergência
+   `RECONSTRUCTED`; frescor, provider, lineups, clusters
+   `UNAVAILABLE_IN_REPLAY`). Bloqueou 24,6 k de 83 k apostas simuladas; ROI
+   continuou negativo.
+3. ~~Modelo híbrido mercado + modelo~~ — feito (blend, stack, residual).
+   Resultado: **NO EVIDENCE OF MARKET EDGE**; nenhuma promoção.
 4. **Odds históricas de mais mercados** (OU outras linhas, BTTS, handicap) para
    ampliar a base com baseline de mercado.
 5. **Player Engine**: integrar fonte pública de minutos/xG/chutes quando

@@ -201,7 +201,39 @@ mercado, competição, **primárias × alternativas** (`selection_vs_cluster`),
 `PROMISING` / `NO CLEAR ADVANTAGE`. Grupos com N abaixo do piso mostram
 `INSUFFICIENT SAMPLE`.
 
-## 10. Como rodar
+## 10. Iteração 4 — camadas adicionadas (`docs/MARKET_AWARE_MODELS.md`, `docs/SUPERBET_VALIDATION.md`)
+
+- **Duas classificações de evidência, nunca misturadas**: `RESEARCH MARKET
+  BENCHMARK` (replay com odds football-data, sem carimbo por partida) e
+  `SUPERBET SHADOW VALIDATION` (odds coletadas pelo app, carimbo real).
+  Cada relatório carrega `classification`.
+- **Frame de replay versionado** (`data/processed/replay_frames/*.parquet`,
+  `dataset_version = replay-frame-v1:<hash>`): features em T por partida;
+  base dos challengers market-aware.
+- **Bootstrap por cluster de evento** (`cluster_bootstrap_ci`,
+  `effective_sample_size`): seleções do mesmo jogo não são independentes; a
+  UI mostra *Raw N* e *Effective N*. **BH-FDR** (`benjamini_hochberg`) em
+  testes por segmento. **Decomposição de Brier** (`brier_decomposition`).
+- **Market-aware** (`validation/market_aware.py`): CV temporal aninhada,
+  frozen holdout único por `config_hash + dataset_version`, regra de promoção
+  §29 (`brier_better`, `logloss_not_worse`, `calibration_not_worse`,
+  `stable_windows` ≥ 60 %, `effective_n` ≥ 300) + CLV Superbet ≥ 0 para a
+  camada de value.
+- **HistoricalQualityGate** (`replay.py`): componentes `RECONSTRUCTED`
+  (edge/EV/odd, amostra mínima, divergência entre modelos) bloqueiam apostas
+  simuladas; `PARTIAL` e `UNAVAILABLE_IN_REPLAY` (frescor, provider, lineups,
+  clusters) são declarados, nunca inventados. Run #41: 83.004 candidatas,
+  18.942 bloqueadas por divergência, 5.676 por amostra; ROI −9,4 %, CLV −3,5 %.
+- **Shadow v2** (`shadow.py`): Superbet fair × EdgeFut × híbrido com IC por
+  cluster, CLV Superbet, validação OOS do grau A/B/C/D e dos bins do
+  Opportunity Score.
+- **Model Health V2** (`model_health.py`): FOOTBALL PREDICTION STATUS e
+  MARKET EDGE STATUS separados.
+
+Resultado real (2026-09-24): **NO EVIDENCE OF MARKET EDGE** — ver
+`docs/ITERATION_4_REPORT.md`.
+
+## 11. Como rodar
 
 ```bash
 # replay de clubes (padrão: 11 ligas com odds, 2022-08 →, janelas de 30 d)
@@ -219,8 +251,16 @@ curl '127.0.0.1:8765/validation/shadow?live=true'
 curl '127.0.0.1:8765/validation/drift?live=true'
 curl 127.0.0.1:8765/validation/coverage
 curl 127.0.0.1:8765/validation/governance
+# market-aware (discovery + congelamento; depois holdout, uma vez)
+curl -X POST 127.0.0.1:8765/validation/market-aware -H 'content-type: application/json' -d '{}'
+curl -X POST 127.0.0.1:8765/validation/market-aware/holdout -H 'content-type: application/json' -d '{}'
+curl 127.0.0.1:8765/validation/market-aware/latest
+# evidência Superbet
+curl '127.0.0.1:8765/validation/superbet?live=true'
+curl '127.0.0.1:8765/validation/superbet/selection?event_id=13851025&market_key=TOTAL_GOALS&selection_key=OVER&line=2.5'
 ```
 
-Na UI: **Validação** (abas Model Validation · Model Comparison · Coverage Map ·
-Shadow · Drift). O replay completo de clubes leva alguns minutos (ajuste de
+Na UI: **Validação** (abas Model Validation · Model Comparison · Market-Aware ·
+Superbet · Coverage Map · Shadow · Drift) e **Performance** (Market Efficiency
+Lab · Superbet Lab). O replay completo de clubes leva alguns minutos (ajuste de
 seis modelos × 463 janelas × 11 ligas); o botão mostra `running` até terminar.
