@@ -168,6 +168,24 @@ def shadow(live: bool = False, session: Session = Depends(get_session)):
     return rep or daily_report(session, persist=False)
 
 
+@router.get("/superbet")
+def superbet_evidence(live: bool = False, session: Session = Depends(get_session)):
+    """SUPERBET SHADOW VALIDATION (§8–§12, §25–§28): cobertura de snapshots, buckets T-24h…T-15m, overround,
+    movimento de linha, viés da casa, Superbet fair como baseline, CLV próprio, tempo até o kickoff, painel shadow."""
+    from ...validation.superbet import evidence_report as _ev
+    from ...validation.superbet import latest_report as _latest_ev
+
+    rep = None if live else _latest_ev(session)
+    return rep or _ev(session, persist=False)
+
+
+@router.get("/superbet/selection")
+def superbet_selection(event_id: int, market_key: str, selection_key: str, line: float | None = None, session: Session = Depends(get_session)):
+    from ...validation.superbet import selection_history
+
+    return selection_history(session, event_id, market_key, selection_key, line)
+
+
 @router.get("/drift")
 def drift(live: bool = False, session: Session = Depends(get_session)):
     rep = None if live else latest_drift(session)

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..db.models import Event, PredictionSnapshot, ShadowPrediction
+from ..db.models import ClosingLine, Event, PredictionSnapshot, ShadowPrediction
 
 log = logging.getLogger(__name__)
 
@@ -120,13 +120,41 @@ def _settle_shadow(session: Session, now: datetime) -> int:
         .limit(5000)
     ).all()
     n = 0
+    closing_cache: dict[int, dict[tuple, float]] = {}
     for sp, ev in rows:
         result = MatchResult(hg=int(ev.home_score), ag=int(ev.away_score), source=ev.result_source or "")
         won = settle_selection(sp.market_key, sp.selection_key, sp.line, result)
         sp.result = {"hg": result.hg, "ag": result.ag, "source": result.source}
         sp.won = won
         sp.settled_at = now
+        sp.closing_odd = _closing_for(session, closing_cache, sp)
         n += 1
+    backfill_shadow_closing(session, closing_cache)
+    return n
+
+
+def _closing_for(session: Session, cache: dict[int, dict[tuple, float]], sp: ShadowPrediction) -> float | None:
+    """Closing line Superbet da própria seleção (CLV, §9). Nunca alimenta decisão: só é lida na liquidação."""
+    if sp.event_id not in cache:
+        rows = session.execute(select(ClosingLine).where(ClosingLine.event_id == sp.event_id)).scalars().all()
+        cache[sp.event_id] = {(r.market_key, r.selection_key, r.line): float(r.price) for r in rows}
+    return cache[sp.event_id].get((sp.market_key, sp.selection_key, sp.line))
+
+
+def backfill_shadow_closing(session: Session, cache: dict[int, dict[tuple, float]] | None = None, limit: int = 5000) -> int:
+    """Linhas shadow já liquidadas sem `closing_odd` cujo evento entretanto ganhou closing line
+    (ex.: backfill de closing). `closing_odd` é campo de liquidação — a previsão não é tocada."""
+    cache = cache if cache is not None else {}
+    have = select(ClosingLine.event_id).distinct()
+    rows = session.execute(
+        select(ShadowPrediction).where(ShadowPrediction.settled_at.is_not(None), ShadowPrediction.closing_odd.is_(None), ShadowPrediction.odd.is_not(None), ShadowPrediction.event_id.in_(have)).limit(limit)
+    ).scalars().all()
+    n = 0
+    for sp in rows:
+        c = _closing_for(session, cache, sp)
+        if c is not None:
+            sp.closing_odd = c
+            n += 1
     return n
 
 

@@ -360,9 +360,14 @@ def job_reconcile() -> dict:
 
 def _shadow_report() -> dict:
     from ..validation.shadow import daily_report
+    from ..validation.superbet import evidence_report
 
     with session_scope() as s:
-        return daily_report(s, persist=True)
+        rep = daily_report(s, persist=True)
+        # SUPERBET SHADOW REPORT (§48): evidência própria da Superbet, persistida com o diário
+        ev = evidence_report(s, persist=True, export=True)
+        rep["superbet_evidence"] = {"events": ev["coverage"].get("events"), "shadow_settled": ev["shadow_panel"]["total"]["settled"], "clv_n": ev["clv"].get("n_with_closing")}
+        return rep
 
 
 def job_shadow_report() -> dict:

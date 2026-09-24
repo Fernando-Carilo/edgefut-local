@@ -54,7 +54,31 @@ def capture_closing_lines(session: Session, max_events: int = 30) -> dict:
         if n:
             fixed += 1
         session.commit()
-    return {"ok": True, "checked": len(upcoming), "refreshed": refreshed, "fixed": fixed}
+    backfilled = backfill_closing_lines(session)
+    return {"ok": True, "checked": len(upcoming), "refreshed": refreshed, "fixed": fixed, "backfilled": backfilled}
+
+
+def backfill_closing_lines(session: Session, max_events: int = 200, now: datetime | None = None) -> int:
+    """Eventos já encerrados sem closing line mas **com snapshots pré-kickoff** (ex.: app fechado no kickoff):
+    fixa o closing com a última odd pré-jogo que já tínhamos. Não coleta nada novo, não inventa snapshot —
+    `minutes_before_kickoff` registra honestamente a distância da última coleta."""
+    now = now or datetime.utcnow()
+    have = select(ClosingLine.event_id).distinct()
+    candidates = session.execute(
+        select(Event.id)
+        .where(Event.kickoff_utc < now - POST_KICKOFF_GRACE, Event.duplicate_of.is_(None), Event.id.not_in(have))
+        .where(Event.id.in_(select(OddsSnapshot.event_id).distinct()))
+        .order_by(Event.kickoff_utc.desc())
+        .limit(max_events)
+    ).scalars().all()
+    n = 0
+    for eid in candidates:
+        ev = session.get(Event, eid)
+        if ev is not None and _fix_closing(session, ev):
+            n += 1
+    if n:
+        session.commit()
+    return n
 
 
 def _fix_closing(session: Session, ev: Event) -> int:
