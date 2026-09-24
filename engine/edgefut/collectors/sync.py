@@ -14,7 +14,12 @@ from sqlalchemy.orm import Session
 from ..db.models import Competition, Event, OddsSnapshot, SourceLog
 from ..db.session import session_scope
 from ..normalization import TeamMatch, classify_competition, is_womens
-from ..normalization.identity import CanonicalEventResolver, EventIdentity, canonical_event_id, canonical_team_key
+from ..normalization.identity import (
+    CanonicalEventResolver,
+    EventIdentity,
+    canonical_event_id,
+    canonical_team_key,
+)
 from ..providers import SourceBlocked, SourceError, get_http_client
 from ..providers.historical import get_store
 from ..providers.superbet import SuperbetEvent, SuperbetProvider
@@ -284,7 +289,19 @@ class SuperbetSync:
             n += 1
         row.odds_collected_at = collected
         session.flush()
-        return {"ok": True, "skipped": False, "odds": n, "total": len(ev.odds), "source": "cached" if n == 0 else "ok"}
+        out = {"ok": True, "skipped": False, "odds": n, "total": len(ev.odds), "source": "cached" if n == 0 else "ok"}
+        # iteração 5 — Data Flywheel: só fetches reais viram raw snapshot (cache não é observação nova)
+        if ev.raw_full is not None and ev.fetch_status == "ok":
+            try:
+                from ..flywheel.collector import ingest_event_payload
+
+                with session.begin_nested():  # SAVEPOINT: falha na raw layer não desfaz a coleta legada
+                    ing = ingest_event_payload(session, event_id=event_id, payload=ev.raw_full, fetched_at=collected, source_url=ev.source_url, http_status=ev.http_status)
+                out["flywheel"] = {"raw_id": ing.raw_id, "target": ing.snapshot_target, "normalized": ing.normalized_rows, "unknown": ing.odds_unknown, "quarantined": ing.quarantined, "confirmation": ing.confirmation}
+            except Exception as exc:  # noqa: BLE001 — a coleta legada nunca falha por causa da raw layer
+                log.exception("flywheel ingest falhou para evento %s: %s", event_id, exc)
+                out["flywheel"] = {"error": str(exc)[:200]}
+        return out
 
     @staticmethod
     def _update_live(row: Event, ev: SuperbetEvent) -> None:

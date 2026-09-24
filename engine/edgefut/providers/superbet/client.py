@@ -10,7 +10,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from ...core.config import settings
 from ..http_client import FetchResult, HttpClient, SourceError, get_http_client
@@ -40,6 +40,10 @@ class SuperbetEvent:
     source_url: str = ""
     collected_at: datetime | None = None
     event_url: str = ""
+    # iteração 5: payload completo (com odds) e se o fetch foi real ("ok") ou servido do cache
+    raw_full: dict | None = None
+    fetch_status: str = "ok"
+    http_status: int | None = None
 
 
 def _slug(s: str) -> str:
@@ -62,8 +66,8 @@ def _parse_utc(raw: dict) -> datetime:
         s = s.replace("Z", "+00:00").replace(" ", "T")
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).replace(tzinfo=None)
     ms = raw.get("unixDateMillis")
     return datetime.utcfromtimestamp(int(ms) / 1000)
 
@@ -158,7 +162,11 @@ class SuperbetProvider:
         if not data:
             raise SourceError(f"evento {event_id} não encontrado na Superbet")
         raw = data[0] if isinstance(data, list) else data
-        return self._parse_event(raw, res)
+        ev = self._parse_event(raw, res)
+        ev.raw_full = raw
+        ev.fetch_status = str(getattr(res, "status", "ok") or "ok")
+        ev.http_status = getattr(res, "http_status", None)
+        return ev
 
     def fetch_tournaments(self) -> tuple[dict[int, dict], FetchResult]:
         url = self.tournaments_url()
