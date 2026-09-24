@@ -235,7 +235,9 @@ def set_value_enabled(session: Session, market_category: str, enabled: bool, *, 
         raise ValueError("motivo obrigatório (≥ 5 caracteres)")
     before = {"value_enabled": bool(st.value_enabled), "state": st.state}
     st.value_enabled = enabled
-    st.state = "VALIDATED" if enabled else ("PROMISING" if st.enablement_candidate else st.state)
+    # desligar nunca deixa o mercado rotulado VALIDATED: volta a PROMISING (se ainda candidato) ou a COLLECTING,
+    # e o próximo ciclo de pesquisa recalcula a partir da evidência
+    st.state = "VALIDATED" if enabled else ("PROMISING" if st.enablement_candidate else "COLLECTING")
     hist = list(st.history or [])
     hist.append({"at": now.isoformat(), "from": before["state"], "to": st.state, "value_enabled": enabled, "manual": True})
     st.history, st.updated_at = hist[-50:], now

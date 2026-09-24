@@ -306,7 +306,11 @@ def settlement_audit(session: Session, *, now: datetime | None = None) -> dict:
     for cat, ne, ns in ev_market:
         if cat in cov:
             cov[cat] = {"events": int(ne), "snapshots": int(ns)}
-    missing_fields = session.execute(select(SuperbetSettlement.market_category, func.count()).where(SuperbetSettlement.status == "UNSETTLED_DATA_MISSING").group_by(SuperbetSettlement.market_category)).all()
+    miss_counter: dict[tuple[str, str], int] = {}
+    for cat, fields in session.execute(select(SuperbetSettlement.market_category, SuperbetSettlement.missing_fields).where(SuperbetSettlement.status == "UNSETTLED_DATA_MISSING")).all():
+        key = (cat, ",".join(sorted(fields)) if isinstance(fields, list) else str(fields or "?"))
+        miss_counter[key] = miss_counter.get(key, 0) + 1
+    missing_by_market = sorted(({"market_category": c, "missing_fields": f, "n": n} for (c, f), n in miss_counter.items()), key=lambda r: (-r["n"], r["market_category"]))
     return {
         "generated_at": now, "settlement_version": SETTLEMENT_VERSION,
         "events": {"finished": len(finished), "settled": settled_ev, "pending": pending_ev, "missing_result": missing_result, "missing_market_stats": missing_stats, "errors": error_ev},
@@ -318,7 +322,7 @@ def settlement_audit(session: Session, *, now: datetime | None = None) -> dict:
             {"market_category": c, "events_with_snapshots": cov[c]["events"], "snapshots": cov[c]["snapshots"], "events_settled": len(market_events_settled[c]), **per_market[c]}
             for c in CATEGORY_ORDER
         ],
-        "missing_by_market": {c: int(n) for c, n in missing_fields},
+        "missing_by_market": missing_by_market,
         "note": "UNSETTLED_DATA_MISSING = estatística ausente na fonte (nunca se assume derrota). UNSUPPORTED = mercado sem regra de liquidação (jogador).",
     }
 

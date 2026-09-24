@@ -179,8 +179,11 @@ def restore_backup(file_name: str, *, now: datetime | None = None) -> dict:
     src = backups_dir() / Path(file_name).name
     if not src.exists() or not src.name.startswith(BACKUP_PREFIX):
         return {"ok": False, "error": "backup não encontrado"}
-    with sqlite3.connect(f"file:{src}?mode=ro", uri=True) as c:
-        integrity = c.execute("PRAGMA integrity_check").fetchone()[0]
+    try:
+        with sqlite3.connect(f"file:{src}?mode=ro", uri=True) as c:
+            integrity = c.execute("PRAGMA integrity_check").fetchone()[0]
+    except sqlite3.Error as exc:
+        integrity = f"unreadable ({exc})"
     if integrity != "ok":
         return {"ok": False, "error": f"backup com integrity_check={integrity}; restore recusado"}
     db = get_paths().sqlite
