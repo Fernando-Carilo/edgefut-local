@@ -91,6 +91,47 @@ def evaluate_promotion(report: dict, challenger: str, champion: str) -> dict:
     return {"challenger": challenger, "champion": champion, "eligible": eligible, "verdict": verdict, "checks": checks, "roi_is_not_a_criterion": True}
 
 
+def evaluate_market_aware_promotion(holdout: dict | None, market: str, *, clv: dict | None = None) -> dict:
+    """MARKET-AWARE PROMOTION RULE (§29) para a camada de VALOR de um mercado.
+
+    Um challenger market-aware só pode alimentar recomendações de valor se, no **holdout congelado**
+    (nunca na discovery), cumprir TODOS os critérios de `market_aware.promotion_check` — Brier OOS melhor
+    que o mercado, LogLoss não pior, calibração não pior, estabilidade entre janelas, IC bootstrap por
+    cluster, N efetivo adequado — **e** o CLV do shadow Superbet não for negativo (`clv["low"]` ≥ 0 ou
+    inconclusivo com ponto ≥ 0). Sem holdout → NOT EVALUATED. ROI nunca é critério."""
+    from .market_aware import CHALLENGERS, promotion_check
+
+    if not holdout or "error" in holdout:
+        return {"market": market, "verdict": "NOT EVALUATED", "reason": "sem holdout congelado", "checks": {}, "value_layer_allowed": False}
+    ev = (holdout.get("markets") or {}).get(market)
+    if not ev or not ev.get("vs_market"):
+        return {"market": market, "verdict": "INSUFFICIENT DATA", "reason": "holdout sem linhas suficientes neste mercado", "checks": {}, "value_layer_allowed": False}
+    checks = {ch: promotion_check(ev, ch) for ch in CHALLENGERS if ch in ev["vs_market"]}
+    passing = [c for c in checks.values() if c["pass"]]
+    clv_ok: bool | None
+    if clv is None or clv.get("point") is None:
+        clv_ok = None
+    else:
+        # ponto ≥ 0 e IC não inteiramente negativo
+        clv_ok = bool(clv["point"] >= 0 and not (clv.get("high") is not None and clv["high"] < 0))
+    allowed = bool(passing) and clv_ok is True
+    if passing and clv_ok is True:
+        verdict = "PROMOTE VALUE LAYER"
+    elif passing and clv_ok is None:
+        verdict = "CHALLENGER BEATS MARKET · CLV UNKNOWN"
+    elif passing:
+        verdict = "CHALLENGER BEATS MARKET · CLV NEGATIVE"
+    else:
+        verdict = "NO EVIDENCE OF MARKET EDGE"
+    return {
+        "market": market, "verdict": verdict, "value_layer_allowed": allowed,
+        "checks": checks, "passing": [c["challenger"] for c in passing],
+        "clv": {"ok": clv_ok, **(clv or {})}, "source": holdout.get("classification"),
+        "model_hash": holdout.get("model_hash"), "config_hash": holdout.get("config_hash"), "dataset_version": holdout.get("dataset_version"),
+        "roi_is_not_a_criterion": True,
+    }
+
+
 def pairwise_from_preds(preds_by_model: dict[str, list], a: str, b: str) -> dict | None:
     """Usado pelo replay para gravar a diferença pareada challenger × campeão."""
     pa, pb = preds_by_model.get(a), preds_by_model.get(b)
@@ -128,4 +169,4 @@ def promote(session: Session, consensus_key: str, *, reason: str, evaluation: di
     return {"ok": True, "from": previous, "to": consensus_key}
 
 
-__all__ = ["current_champion", "evaluate_promotion", "promote", "pairwise_from_preds", "CONSENSUS_KEYS"]
+__all__ = ["current_champion", "evaluate_promotion", "evaluate_market_aware_promotion", "promote", "pairwise_from_preds", "CONSENSUS_KEYS"]

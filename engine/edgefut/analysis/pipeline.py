@@ -809,9 +809,11 @@ def _write_shadow(session: Session, row: Event, a: MatchAnalysis, snapshot_id: i
     """Shadow mode: uma linha append-only por seleção avaliada (todos os estados, inclusive NO_BET
     e MODEL_ONLY), sem interação do usuário. É a base do relatório diário e do drift."""
     n = 0
+    minutes_to_kickoff = int(max(0.0, (row.kickoff_utc - datetime.utcnow()).total_seconds()) // 60)
     for r in a.recommendations:
         if r.market_key == "PLAYER_TO_SCORE" or r.model_prob <= 0:
             continue
+        ma, req = r.market_aware or {}, r.required_edge or {}
         session.add(ShadowPrediction(
             event_id=row.id, snapshot_id=snapshot_id, kickoff_utc=row.kickoff_utc, competition_name=row.competition_name,
             dataset_code=a.home.dataset_code or a.away.dataset_code, market_key=r.market_key, selection_key=r.selection_key, line=r.line,
@@ -820,6 +822,8 @@ def _write_shadow(session: Session, row: Event, a: MatchAnalysis, snapshot_id: i
             opportunity_score=r.opportunity_score, data_quality=a.data_quality.score, state=r.state or "NO_BET", evidence=r.evidence,
             cluster_id=r.cluster_id, is_primary=bool(r.is_primary), model_version=versions.PIPELINE,
             model_versions={"champion": a.champion, **{k: v for k, v in versions.ALL_MODELS.items() if k in ("ensemble", "poisson_v2", "calibration")}},
+            hybrid_prob=ma.get("hybrid"), residual_edge_pp=ma.get("residual_edge_pp"), required_edge_pp=req.get("required_pp"),
+            adjusted_edge_pp=req.get("edge_adjusted_pp"), minutes_to_kickoff=minutes_to_kickoff,
         ))
         n += 1
     return n

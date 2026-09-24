@@ -56,11 +56,25 @@ def _v3_settlement_governance(conn: Connection) -> None:
     conn.execute(text("UPDATE event SET settlement_status = 'SETTLED' WHERE settlement_status IS NULL AND home_score IS NOT NULL AND away_score IS NOT NULL"))
 
 
+def _v4_shadow_market_aware(conn: Connection) -> None:
+    """Iteração 4: colunas de previsão market-aware no shadow (preenchidas só na criação; linhas antigas
+    ficam NULL — nunca são reconstruídas a posteriori)."""
+    for col, ddl in (
+        ("hybrid_prob", "FLOAT"),
+        ("residual_edge_pp", "FLOAT"),
+        ("required_edge_pp", "FLOAT"),
+        ("adjusted_edge_pp", "FLOAT"),
+        ("minutes_to_kickoff", "INTEGER"),
+    ):
+        _add_column(conn, "shadow_prediction", col, ddl)
+
+
 MIGRATIONS: list[tuple[int, list[str | Callable[[Connection], None]]]] = [
     # (versão, [SQL ou callable...]) — adicionar novas entradas ao final, nunca editar as antigas.
     (1, []),
     (2, [_v2_identity_live_closing]),
     (3, [_v3_settlement_governance]),
+    (4, [_v4_shadow_market_aware]),
 ]
 
 

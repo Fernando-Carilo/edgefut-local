@@ -260,6 +260,14 @@ class ShadowPrediction(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     model_version: Mapped[str] = mapped_column(String(64))
     model_versions: Mapped[dict | None] = mapped_column(JSON)
+    # iteração 4 — registrados no instante da previsão (nunca recalculados): probabilidade do híbrido
+    # congelado (market-aware), residual edge vs mercado, required edge e edge ajustado por incerteza,
+    # e a distância ao kickoff no momento da previsão.
+    hybrid_prob: Mapped[float | None] = mapped_column(Float)
+    residual_edge_pp: Mapped[float | None] = mapped_column(Float)
+    required_edge_pp: Mapped[float | None] = mapped_column(Float)
+    adjusted_edge_pp: Mapped[float | None] = mapped_column(Float)
+    minutes_to_kickoff: Mapped[int | None] = mapped_column(Integer)
     # liquidação (únicos campos escritos depois)
     won: Mapped[bool | None] = mapped_column(Boolean)
     result: Mapped[dict | None] = mapped_column(JSON)
@@ -273,6 +281,7 @@ SHADOW_PREDICTION_FIELDS = frozenset(
         "selection_key", "line", "odd", "model_prob", "model_prob_raw", "model_prob_calibrated", "market_prob",
         "edge_pp", "ev_pct", "confidence_score", "opportunity_score", "data_quality", "state", "evidence",
         "cluster_id", "is_primary", "model_version", "model_versions",
+        "hybrid_prob", "residual_edge_pp", "required_edge_pp", "adjusted_edge_pp", "minutes_to_kickoff",
     }
 )
 
