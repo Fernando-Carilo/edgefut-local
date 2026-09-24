@@ -14,6 +14,7 @@ from ..domain.analysis import (
     SimulationOutput,
 )
 from ..domain.freshness import FreshnessStatus
+from ..flywheel.governance import value_enabled_for
 from ..models.calibration import pick
 from ..providers.player import player_market_verdict
 from .confidence import grade_for
@@ -40,6 +41,7 @@ STATE_TEXT = {
     "MARKET_OBSERVED": "Modelo e mercado concordam: sem edge relevante.",
     "VALUE_CANDIDATE": "Passou no quality gate; falta prova out-of-sample suficiente neste mercado.",
     "VALUE": "Passou no quality gate e o mercado tem histórico out-of-sample suficiente.",
+    "RESEARCH_SIGNAL": "Sinal de pesquisa: o modelo vê edge, mas este mercado ainda não está validado contra a Superbet (VALUE desativado). Observar, não apostar.",
     "OBSERVATION": "Edge existe, mas ficou em observação.",
     "NO_BET": "Sem entrada.",
 }
@@ -71,6 +73,8 @@ def state_label(state: str | None, model_prob: float) -> str | None:
         return "VALUE"
     if state == "VALUE_CANDIDATE":
         return "VALUE_CANDIDATE"
+    if state == "RESEARCH_SIGNAL":
+        return "RESEARCH_SIGNAL"
     if state == "MODEL_ONLY":
         return "MODEL_ONLY"
     if state == "OBSERVATION":
@@ -352,6 +356,10 @@ def evaluate(
                     state, status, reasons = "OBSERVATION", "WATCH", ["WATCHING_PRICE", *[r for r in reasons if r != "NO_EDGE"]]
             else:
                 state = "NO_BET"
+            # ---- iteração 5 (§31–§34): VALUE nunca surge só da previsão. Enquanto o mercado não estiver
+            # MARKET_VALIDATED na Superbet (value_enabled=false, padrão), o sinal é RESEARCH_SIGNAL em WATCH.
+            if state in ("VALUE", "VALUE_CANDIDATE") and not value_enabled_for(market.market_key):
+                state, status, reasons = "RESEARCH_SIGNAL", "WATCH", ["VALUE_DISABLED", *reasons]
             if "WATCHING_PRICE" in reasons:
                 state_text = WATCH_PRICE_TEXT
             elif state == "OBSERVATION" and "EDGE_NOT_ROBUST" in reasons:
@@ -395,7 +403,10 @@ def evaluate(
     if any(r.status == "WATCH" for r in recs):
         gated = [r for r in recs if r.status == "WATCH" and "QUALITY_GATE" in r.reasons]
         model_only = [r for r in recs if r.state == "MODEL_ONLY" and "MODEL_ONLY" in r.reasons]
-        if model_only and not gated:
+        research = [r for r in recs if r.state == "RESEARCH_SIGNAL"]
+        if research:
+            v = NoBetVerdict(no_bet=True, reason="VALUE_DISABLED", detail=f"{len(research)} sinal(is) de pesquisa: o modelo vê edge, mas VALUE está desativado até o mercado ser validado contra a Superbet (iteração 5). Nenhuma aposta é recomendada.")
+        elif model_only and not gated:
             v = NoBetVerdict(no_bet=True, reason="MODEL_ONLY", detail=f"{len(model_only)} seleção(ões) com probabilidade calculada, mas sem validação modelo × mercado nesta competição. {MODEL_ONLY_TEXT}")
         elif gated:
             failed = sorted({k for r in gated for k in (r.quality_gate.failed if r.quality_gate else [])})

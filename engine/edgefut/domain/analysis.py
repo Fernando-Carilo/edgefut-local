@@ -27,6 +27,7 @@ NoBetReason = Literal[
     "UNSUPPORTED_COMPETITION",
     "STALE_DATA",
     "QUALITY_GATE",
+    "VALUE_DISABLED",
 ]
 
 
@@ -302,12 +303,12 @@ class QualityGate(BaseModel):
 #   VALUE_CANDIDATE — passou no gate, falta prova out-of-sample no mercado
 #   VALUE           — passou no gate E há prova OOS suficiente no mercado
 #   NO_BET
-OpportunityLabel = Literal["HIGH_PROBABILITY", "VALUE", "HIGH_PROBABILITY_VALUE", "MODEL_FAVORITE", "MODEL_ONLY", "WATCH", "VALUE_CANDIDATE", "NO_BET"]
+OpportunityLabel = Literal["HIGH_PROBABILITY", "VALUE", "HIGH_PROBABILITY_VALUE", "MODEL_FAVORITE", "MODEL_ONLY", "WATCH", "VALUE_CANDIDATE", "RESEARCH_SIGNAL", "NO_BET"]
 
 # Estado da seleção no pipeline de decisão (iteração 3, §22):
 #   MODEL OUTPUT → DATA VALIDATION → MARKET AVAILABLE? (não → MODEL_ONLY) → FAIR PRICE → EDGE → EV
 #   → QUALITY GATE → CORRELATION GATE → CALIBRATION/OOS CHECK → VALUE | OBSERVATION | NO_BET
-RecommendationState = Literal["MODEL_ONLY", "MARKET_OBSERVED", "VALUE_CANDIDATE", "VALUE", "OBSERVATION", "NO_BET"]
+RecommendationState = Literal["MODEL_ONLY", "MARKET_OBSERVED", "VALUE_CANDIDATE", "VALUE", "RESEARCH_SIGNAL", "OBSERVATION", "NO_BET"]
 
 # Nível de evidência de que o modelo bate o MERCADO nesta competição:
 #   SETTLED       — apostas reais liquidadas (N>=30) com ROI/CLV medidos

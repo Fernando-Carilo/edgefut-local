@@ -103,6 +103,7 @@ class RadarSummary(BaseModel):
     # Iteração 3 — eventos pelo estado da melhor primária + clusters (oportunidades sem duplicidade)
     events_by_state: dict[str, int] = Field(default_factory=dict)  # MODEL_ONLY / MARKET_OBSERVED / VALUE_CANDIDATE / VALUE / OBSERVATION / NO_BET
     value_candidates: int = 0
+    research_signals: int = 0  # iteração 5 — eventos cuja melhor primária é RESEARCH_SIGNAL (VALUE desativado)
     model_only: int = 0
     actionable_clusters: int = 0  # soma de teses acionáveis (primárias VALUE/VALUE_CANDIDATE) — "oportunidades reais"
     selections_actionable: int = 0  # seleções RECOMMENDED (inclui alternativas) — para mostrar a redundância evitada
@@ -152,6 +153,7 @@ class DashboardResponse(BaseModel):
     model_health: dict | None = None  # champion, last_replay (vs mercado), drift status, unsettled, shadow N
     value: int = 0
     value_candidates: int = 0
+    research_signals: int = 0
     model_only: int = 0
     actionable_clusters: int = 0
 
@@ -192,6 +194,8 @@ class StakeResponse(BaseModel):
     kelly_full_pct: float
     kelly_fraction_used: float
     warning: str | None
+    disabled: bool = False  # iteração 5 §64 — staking DISABLED enquanto MARKET_EDGE != VALIDATED
+    disabled_reason: str | None = None
 
 
 class MultipleLeg(BaseModel):

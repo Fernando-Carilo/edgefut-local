@@ -46,7 +46,7 @@ def _event_state(a: MatchAnalysis) -> str:
     """Estado do evento = melhor estado entre as primárias (ordem VALUE > VALUE_CANDIDATE > OBSERVATION > MODEL_ONLY > MARKET_OBSERVED > NO_BET)."""
     if a.no_bet.no_bet and a.no_bet.reason in DATA_NO_BET | {"LOW_CONFIDENCE", "MODEL_DISAGREEMENT"}:
         return "NO_BET"
-    for st in ("VALUE", "VALUE_CANDIDATE", "OBSERVATION", "MODEL_ONLY", "MARKET_OBSERVED"):
+    for st in ("VALUE", "VALUE_CANDIDATE", "RESEARCH_SIGNAL", "OBSERVATION", "MODEL_ONLY", "MARKET_OBSERVED"):
         if _best_state(a, (st,)):
             return st
     return "NO_BET"
@@ -98,7 +98,7 @@ def summarize(session: Session, analyses: list[MatchAnalysis], hours: int) -> Ra
     st = jobs.state()
     gate = sum(1 for a in analyses if a.quality_gate_passed)
     a_count = b_count = high = value = watch = no_bet = stale = 0
-    candidates = model_only_n = clusters_n = sel_n = exp_high = 0
+    candidates = model_only_n = clusters_n = sel_n = exp_high = research_n = 0
     reasons: Counter[str] = Counter()
     by_evidence: Counter[str] = Counter()
     by_state: Counter[str] = Counter()
@@ -110,6 +110,8 @@ def summarize(session: Session, analyses: list[MatchAnalysis], hours: int) -> Ra
             value += 1
         elif est == "VALUE_CANDIDATE":
             candidates += 1
+        elif est == "RESEARCH_SIGNAL":
+            research_n += 1
         elif est == "MODEL_ONLY":
             model_only_n += 1
         if any(r.is_primary and r.label == "MODEL_FAVORITE" for r in a.recommendations):
@@ -138,7 +140,7 @@ def summarize(session: Session, analyses: list[MatchAnalysis], hours: int) -> Ra
         with_sufficient_data=sum(1 for a in analyses if a.no_bet.reason not in DATA_NO_BET), analyzed=len(analyses),
         quality_gate_passed=gate, confidence_a=a_count, confidence_b=b_count, high_probability=high, value=value,
         watch=watch, no_bet=no_bet, stale=stale, alerts_unread=_alerts_unread(session), no_bet_by_reason=dict(reasons),
-        gate_passed_by_evidence=dict(by_evidence), events_by_state=dict(by_state), value_candidates=candidates, model_only=model_only_n,
+        gate_passed_by_evidence=dict(by_evidence), events_by_state=dict(by_state), value_candidates=candidates, research_signals=research_n, model_only=model_only_n,
         actionable_clusters=clusters_n, selections_actionable=sel_n, exposure_high=exp_high,
     )
 
@@ -232,7 +234,9 @@ def morning_summary(name: str, s: RadarSummary, health_overall: str | None) -> s
         return f"{name}, encontramos {s.events_found} jogos nas próximas 48 h e a primeira análise está rodando. Volte em alguns minutos."
     parts = [f"{name}, analisamos {s.analyzed} de {s.events_found} jogos das próximas 48 h."]
     if s.quality_gate_passed:
-        parts.append(f"{s.quality_gate_passed} passaram no quality gate ({s.confidence_a} com confiança A, {s.confidence_b} com B): {s.value} VALUE, {s.value_candidates} VALUE CANDIDATE, {s.actionable_clusters} tese(s) acionável(is) em {s.selections_actionable} seleção(ões).")
+        parts.append(f"{s.quality_gate_passed} passaram no quality gate ({s.confidence_a} com confiança A, {s.confidence_b} com B): {s.value} VALUE, {s.value_candidates} VALUE CANDIDATE, {s.research_signals} RESEARCH SIGNAL, {s.actionable_clusters} tese(s) em {s.selections_actionable} seleção(ões).")
+        if s.research_signals and not s.value:
+            parts.append("VALUE está desativado em todos os mercados até haver validação contra a Superbet — os sinais são para observar preço e movimento, não para apostar.")
     else:
         parts.append("Nenhum passou no quality gate hoje — isso é o sistema funcionando, não falhando.")
     if s.model_only:
@@ -310,7 +314,7 @@ def dashboard(session: Session = Depends(get_session)):
         morning_summary=morning_summary(name, summary, health_overall), events_found=summary.events_found,
         quality_gate_passed=summary.quality_gate_passed, watch=summary.watch, no_bet=summary.no_bet,
         alerts_unread=summary.alerts_unread, health_overall=health_overall,
-        model_health=model_health, value=summary.value, value_candidates=summary.value_candidates, model_only=summary.model_only,
+        model_health=model_health, value=summary.value, value_candidates=summary.value_candidates, research_signals=summary.research_signals, model_only=summary.model_only,
         actionable_clusters=summary.actionable_clusters,
     )
 

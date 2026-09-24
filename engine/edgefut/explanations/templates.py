@@ -16,6 +16,7 @@ NO_BET_LABELS = {
     "UNSUPPORTED_COMPETITION": "competição sem histórico mapeado",
     "STALE_DATA": "dados expirados (odds ou histórico desatualizados)",
     "QUALITY_GATE": "não passou no quality gate",
+    "VALUE_DISABLED": "VALUE desativado até validação por mercado (research signal)",
 }
 
 

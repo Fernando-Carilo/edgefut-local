@@ -17,7 +17,13 @@ from datetime import datetime
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
 
-from .models import PREDICTION_FIELDS, SHADOW_PREDICTION_FIELDS, PredictionSnapshot, ShadowPrediction, SnapshotCorrection
+from .models import (
+    PREDICTION_FIELDS,
+    SHADOW_PREDICTION_FIELDS,
+    PredictionSnapshot,
+    ShadowPrediction,
+    SnapshotCorrection,
+)
 
 log = logging.getLogger(__name__)
 

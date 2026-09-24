@@ -52,6 +52,14 @@ def simulator(body: SimulatorRequest):
 
 @router.post("/bankroll/stake", response_model=StakeResponse)
 def stake(body: StakeRequest):
+    from ...flywheel.governance import staking_enabled
+
+    enabled, gate_reason = staking_enabled()
+    if not enabled:
+        # §64: a calculadora continua a mostrar a matemática, mas a recomendação de stake é 0 e explícita.
+        b = body.odd - 1
+        kelly_full = max(0.0, (body.model_prob * b - (1 - body.model_prob)) / b) if b > 0 else 0.0
+        return StakeResponse(method=body.method, stake=0.0, stake_pct=0.0, kelly_full_pct=round(kelly_full * 100, 2), kelly_fraction_used=0.0, warning=gate_reason, disabled=True, disabled_reason=gate_reason)
     b = body.odd - 1
     kelly_full = max(0.0, (body.model_prob * b - (1 - body.model_prob)) / b) if b > 0 else 0.0
     frac = min(body.kelly_fraction, settings.kelly_fraction_max)

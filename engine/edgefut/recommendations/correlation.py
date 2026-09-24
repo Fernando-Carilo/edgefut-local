@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from ..domain.analysis import Recommendation
 
-ACTIONABLE_STATES = ("VALUE", "VALUE_CANDIDATE")
+ACTIONABLE_STATES = ("VALUE", "VALUE_CANDIDATE", "RESEARCH_SIGNAL")
 
 # ordem canônica para desempate na escolha da primária (mercado mais "puro" primeiro)
 MARKET_PRIORITY = {
@@ -110,7 +110,7 @@ class ExposureView:
 
 
 _STATUS_RANK = {"RECOMMENDED": 0, "WATCH": 1, "NO_BET": 2}
-_STATE_RANK = {"VALUE": 0, "VALUE_CANDIDATE": 1, "OBSERVATION": 2, "MODEL_ONLY": 3, "MARKET_OBSERVED": 4, "NO_BET": 5}
+_STATE_RANK = {"VALUE": 0, "VALUE_CANDIDATE": 1, "RESEARCH_SIGNAL": 2, "OBSERVATION": 3, "MODEL_ONLY": 4, "MARKET_OBSERVED": 5, "NO_BET": 6}
 
 
 def _rank(r: Recommendation) -> tuple:

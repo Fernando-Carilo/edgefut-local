@@ -39,7 +39,7 @@ def _fingerprint(a: MatchAnalysis) -> dict:
         "label": f"{a.event.home_name} × {a.event.away_name}",
         "kickoff": a.event.kickoff_utc.isoformat(),
         # iteração 3 — watchlist de preço: primárias acionáveis e seleções "quase" (WATCHING PRICE)
-        "value": {_rk(r): r.odd for r in a.recommendations if r.is_primary and r.state in ("VALUE", "VALUE_CANDIDATE")},
+        "value": {_rk(r): r.odd for r in a.recommendations if r.is_primary and r.state in ("VALUE", "VALUE_CANDIDATE", "RESEARCH_SIGNAL")},
         "watching": {_rk(r): (r.price or {}).get("min_acceptable_odd") for r in a.recommendations if "WATCHING_PRICE" in r.reasons},
     }
 

@@ -86,6 +86,14 @@ def freeze_status(session: Session) -> dict:
 # ---------------------------------------------------------------------------
 _cache: dict = {"at": 0.0, "enabled": {}, "validated": set()}
 _lock = threading.Lock()
+# Só para testes unitários do motor de recomendações: força VALUE ligado/desligado sem tocar na BD.
+# Nunca é definido em produção — o único caminho real é `set_value_enabled` (com trilha) por mercado.
+_test_override: bool | None = None
+
+
+def set_test_override(flag: bool | None) -> None:
+    global _test_override
+    _test_override = flag
 
 
 def _refresh_cache(session: Session | None = None) -> None:
@@ -109,6 +117,8 @@ def _refresh_cache(session: Session | None = None) -> None:
 
 def value_enabled_for(market_key: str) -> bool:
     """`market_key` legado (1X2, TOTAL_GOALS…) → categoria canónica → VALUE_ENABLED. Default False."""
+    if _test_override is not None:
+        return _test_override
     with _lock:
         if time.monotonic() - _cache["at"] > 60:
             _refresh_cache()
@@ -117,6 +127,8 @@ def value_enabled_for(market_key: str) -> bool:
 
 
 def staking_enabled() -> tuple[bool, str | None]:
+    if _test_override is not None:
+        return _test_override, None
     with _lock:
         if time.monotonic() - _cache["at"] > 60:
             _refresh_cache()
@@ -233,4 +245,4 @@ def set_value_enabled(session: Session, market_category: str, enabled: bool, *, 
     return edge_state_row(st)
 
 
-__all__ = ["register_freeze", "freeze_status", "value_enabled_for", "staking_enabled", "update_edge_states", "edge_states", "set_value_enabled", "invalidate_cache", "FROZEN_MODELS", "PAUSED_RESEARCH"]
+__all__ = ["register_freeze", "freeze_status", "value_enabled_for", "staking_enabled", "update_edge_states", "edge_states", "set_value_enabled", "invalidate_cache", "set_test_override", "FROZEN_MODELS", "PAUSED_RESEARCH"]

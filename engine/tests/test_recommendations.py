@@ -311,3 +311,18 @@ def test_clusters_pick_one_primary_per_thesis_and_penalize_alternatives():
     for r in recs:
         by.setdefault(r.cluster_id, []).append(r.is_primary)
     assert all(sum(v) == 1 for v in by.values())
+
+
+@pytest.mark.value_disabled
+def test_value_disabled_turns_value_into_research_signal():
+    """Iteração 5 §31–§34: com VALUE_ENABLED=false (padrão real) o mesmo edge vira RESEARCH_SIGNAL em WATCH;
+    nenhuma seleção fica RECOMMENDED e o veredito do evento explica VALUE_DISABLED."""
+    recs, verdict, why_not = _evaluate()
+    home = next(r for r in recs if r.selection_key == "HOME")
+    assert home.state == "RESEARCH_SIGNAL" and home.label == "RESEARCH_SIGNAL" and home.status == "WATCH"
+    assert home.reasons[0] == "VALUE_DISABLED"
+    assert "não apostar" in home.state_text.lower() or "observar" in home.state_text.lower()
+    assert all(r.status != "RECOMMENDED" for r in recs)
+    assert verdict.no_bet is True and verdict.reason == "VALUE_DISABLED"
+    assert why_not  # o evento explica-se
+    assert_no_guarantee_language(home.why)

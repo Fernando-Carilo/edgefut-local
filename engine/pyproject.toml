@@ -48,6 +48,7 @@ packages = ["edgefut"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["value_disabled: corre com VALUE_ENABLED=false (padrão real da iteração 5)"]
 
 [tool.ruff]
 line-length = 100

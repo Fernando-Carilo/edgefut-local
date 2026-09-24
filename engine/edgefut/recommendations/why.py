@@ -57,6 +57,8 @@ def why_bet(rec: Recommendation, ctx: WhyContext) -> list[str]:
         out.append("Rótulo VALUE: o valor está na diferença entre modelo e mercado, não na probabilidade absoluta.")
     elif rec.label == "VALUE_CANDIDATE":
         out.append("Rótulo VALUE CANDIDATE: passou no gate, mas este mercado ainda não tem prova out-of-sample suficiente para ser chamado de VALUE.")
+    elif rec.label == "RESEARCH_SIGNAL":
+        out.append("Rótulo RESEARCH SIGNAL: o modelo vê edge, mas VALUE está desativado neste mercado até haver validação contra a Superbet (Pesquisa → estado do mercado). É um sinal para observar preço e movimento, não uma recomendação.")
     if "EXTREME_PROBABILITY" in rec.reasons:
         out.append(f"Probabilidade extrema ({_pct(rec.model_prob, 0)}) com amostra insuficiente para sustentá-la: confiança penalizada, probabilidade não truncada.")
     return out
@@ -83,6 +85,8 @@ def why_not(rec: Recommendation, ctx: WhyContext, gate: QualityGate | None) -> l
             gap = (rec.price or {}).get("price_gap_pct")
             min_odd = (rec.price or {}).get("min_acceptable_odd")
             out.append(f"Sem edge suficiente: {rec.edge_pp:+.1f} pp / EV {rec.ev_pct:+.1f}%. Probabilidade interessante, mas preço atual não oferece margem suficiente" + (f" — odd mínima aceitável {min_odd:.2f} ({gap:+.1f}%)." if min_odd and gap is not None else "."))
+        elif r == "VALUE_DISABLED":
+            out.append(f"RESEARCH SIGNAL: edge {rec.edge_pp:+.1f} pp / EV {rec.ev_pct:+.1f}% no modelo, mas VALUE está desativado neste mercado até validação contra a Superbet (N efetivo, CLV, calibração e hipótese pré-registada). Observe preço e movimento; não é recomendação.")
         elif r == "MODEL_ONLY":
             out.append("Probabilidade calculada, mas sem preço de mercado válido para determinar valor: esta competição não tem odds históricas para validar o modelo contra o mercado (evidência MODEL_ONLY). Nunca rotulamos VALUE aqui.")
         elif r == "OOS_NEGATIVE":
