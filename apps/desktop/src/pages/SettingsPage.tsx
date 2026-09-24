@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { Card, ErrorBox, Loading, PageHeader, SectionTitle } from "@/components/ui";
 import { api } from "@/lib/api";
+import { applyBackgroundSettings, inTauri, quitApp, type ShellBackgroundResult } from "@/lib/shell";
 
 const OPP_LABELS: Record<string, string> = {
   model_confidence: "Confiança do modelo",
@@ -23,6 +24,7 @@ export function SettingsPage() {
   const q = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const [form, setForm] = useState<SettingsModel | null>(null);
+  const [shell, setShell] = useState<ShellBackgroundResult | null>(null);
   useEffect(() => {
     if (q.data && !form) setForm(q.data);
   }, [q.data, form]);
@@ -30,6 +32,7 @@ export function SettingsPage() {
     mutationFn: (s: SettingsModel) => api.saveSettings(s),
     onSuccess: (s) => {
       setForm(s);
+      void applyBackgroundSettings(s.background_collector, s.autostart_on_login).then((r) => setShell(r));
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["models"] });
@@ -187,6 +190,18 @@ export function SettingsPage() {
                 <span className="block text-xs text-ink-2">Retenção 7 diários · 4 semanais · 3 mensais, com verificação de integridade. O raw nunca é apagado automaticamente.</span>
               </span>
             </label>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+            {inTauri() ? (
+              <>
+                <span>Shell Windows: {shell ? `autostart ${shell.autostart_active ? "registrado" : "não registrado"} · close-to-tray ${shell.background_collector ? "ativo" : "inativo"}` : "aplica-se ao salvar"}</span>
+                <button className="btn-ghost ml-auto text-xs text-danger" onClick={() => void quitApp()} title="Encerra janela, bandeja e engine — o coletor para até o próximo arranque">
+                  Sair e parar o coletor
+                </button>
+              </>
+            ) : (
+              <span>Fora da shell Tauri (navegador/dev): bandeja, autostart e close-to-tray não se aplicam; as flags são guardadas no engine.</span>
+            )}
           </div>
         </Card>
         <Card>

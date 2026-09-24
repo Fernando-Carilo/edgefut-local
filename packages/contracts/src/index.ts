@@ -954,10 +954,10 @@ export interface SettingsModel {
   high_probability_min: number;
   opportunity_weights: Record<string, number>;
   /** Iteração 5 §46–§47 — Windows always-on (lidas pelo shell Tauri). */
-  background_collector?: boolean;
-  autostart_on_login?: boolean;
-  notifications_enabled?: boolean;
-  backup_enabled?: boolean;
+  background_collector: boolean;
+  autostart_on_login: boolean;
+  notifications_enabled: boolean;
+  backup_enabled: boolean;
 }
 
 export interface BootstrapStep {

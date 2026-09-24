@@ -32,6 +32,7 @@ import { HEALTH_LABELS } from "@edgefut/contracts";
 import { relativeTime } from "@edgefut/shared";
 
 import { api } from "@/lib/api";
+import { onShellNavigate } from "@/lib/shell";
 import { useUi } from "@/store/ui";
 
 import { GlobalSearch } from "./GlobalSearch";
@@ -95,8 +96,12 @@ export function Layout() {
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    const unShell = onShellNavigate((path) => navigate(path));
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      unShell();
+    };
+  }, [navigate]);
 
   const online = health.isSuccess;
   const radarRunning = health.data?.scheduler.radar_running;
