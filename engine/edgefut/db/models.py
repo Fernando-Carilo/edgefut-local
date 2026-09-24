@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -383,3 +384,208 @@ class DatasetState(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_error: Mapped[str | None] = mapped_column(Text)
     parquet_path: Mapped[str | None] = mapped_column(String(400))
+
+
+# ---------------------------------------------------------------------------
+# Iteração 5 — SUPERBET DATA FLYWHEEL
+# ---------------------------------------------------------------------------
+
+
+class RawSuperbetSnapshot(Base):
+    """Camada RAW, append-only e imutável (triggers SQLite impedem UPDATE/DELETE).
+
+    Uma linha por **fetch real** (nunca por resposta em cache) de `/events/{id}`. O payload
+    comprimido (zlib) só é guardado quando o hash muda; quando a Superbet devolve exatamente o
+    mesmo payload, grava-se uma linha de *confirmação* (`payload=None`, `payload_ref_id` →
+    linha com o payload) — a observação no tempo fica registada sem duplicar bytes.
+    """
+
+    __tablename__ = "raw_superbet_snapshot"
+    __table_args__ = (
+        Index("ix_raw_sb_event_time", "event_id", "fetched_at"),
+        UniqueConstraint("event_id", "fetched_at", name="uq_raw_sb_event_fetched"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(Integer, index=True)  # Superbet eventId (sem FK: raw não depende de `event`)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    source_url: Mapped[str] = mapped_column(String(300))
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    source_version: Mapped[str] = mapped_column(String(32))  # superbet-offer-v2
+    payload_hash: Mapped[str] = mapped_column(String(64), index=True)
+    payload: Mapped[bytes | None] = mapped_column(LargeBinary)  # zlib(JSON) ou None (confirmação)
+    payload_ref_id: Mapped[int | None] = mapped_column(Integer)  # linha que contém o payload idêntico
+    payload_bytes: Mapped[int] = mapped_column(Integer, default=0)  # bytes comprimidos gravados nesta linha
+    raw_bytes: Mapped[int] = mapped_column(Integer, default=0)  # tamanho do JSON original
+    kickoff_utc: Mapped[datetime | None] = mapped_column(DateTime)
+    minutes_to_kickoff: Mapped[float | None] = mapped_column(Float)
+    event_state: Mapped[str | None] = mapped_column(String(24))  # prematch | live | finished | unknown
+    odds_total: Mapped[int] = mapped_column(Integer, default=0)
+    odds_mapped: Mapped[int] = mapped_column(Integer, default=0)
+    odds_unknown: Mapped[int] = mapped_column(Integer, default=0)
+    odds_out_of_scope: Mapped[int] = mapped_column(Integer, default=0)
+    parse_failures: Mapped[int] = mapped_column(Integer, default=0)
+    markets_present: Mapped[list | None] = mapped_column(JSON(none_as_null=True))  # categorias canónicas presentes no payload
+    schema_issues: Mapped[list | None] = mapped_column(JSON(none_as_null=True))  # campos obrigatórios em falta
+    snapshot_target: Mapped[str | None] = mapped_column(String(12))  # T-48h … T-5m quando esta coleta cobre um alvo
+
+
+class SuperbetNormalized(Base):
+    """Camada PROCESSADA `superbet_normalized_v1` (append-only): uma linha por seleção observada
+    num raw snapshot, gravada quando o preço mudou ou quando a coleta cobre um alvo T-x."""
+
+    __tablename__ = "superbet_normalized_v1"
+    __table_args__ = (
+        Index("ix_sbn_event_market", "event_id", "canonical_market_id", "selection_id"),
+        Index("ix_sbn_market_time", "canonical_market_id", "fetched_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    raw_snapshot_id: Mapped[int] = mapped_column(ForeignKey("raw_superbet_snapshot.id"), index=True)
+    event_id: Mapped[int] = mapped_column(Integer, index=True)
+    competition_id: Mapped[int | None] = mapped_column(Integer)
+    competition_name: Mapped[str | None] = mapped_column(String(160))
+    market_category: Mapped[str] = mapped_column(String(32))  # MATCH_RESULT, TOTAL_GOALS, CORNERS_TOTAL…
+    canonical_market_id: Mapped[str] = mapped_column(String(64))  # TOTAL_GOALS_2_5, TEAM_CORNERS_HOME_4_5
+    selection_id: Mapped[str] = mapped_column(String(120))  # HOME / OVER / YES / player:12345
+    selection_name: Mapped[str] = mapped_column(String(160))
+    superbet_market_id: Mapped[int] = mapped_column(Integer)
+    line: Mapped[float | None] = mapped_column(Float)
+    odd: Mapped[float] = mapped_column(Float)
+    implied_prob: Mapped[float] = mapped_column(Float)
+    fair_prob: Mapped[float | None] = mapped_column(Float)  # só com mercado completo no mesmo payload
+    overround: Mapped[float | None] = mapped_column(Float)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    kickoff_utc: Mapped[datetime | None] = mapped_column(DateTime)
+    minutes_to_kickoff: Mapped[float | None] = mapped_column(Float)
+    event_state: Mapped[str | None] = mapped_column(String(24))
+    snapshot_target: Mapped[str | None] = mapped_column(String(12))
+    identity_confidence: Mapped[str | None] = mapped_column(String(16))  # STRONG | NAME_ONLY (mercados de jogador)
+    normalizer_version: Mapped[str] = mapped_column(String(32))
+
+
+class SuperbetSettlement(Base):
+    """Liquidação por seleção canónica (`superbet_settlement_v1`). Nunca assume derrota: sem
+    estatística → UNSETTLED_DATA_MISSING; mercado sem regra → UNSUPPORTED."""
+
+    __tablename__ = "superbet_settlement_v1"
+    __table_args__ = (UniqueConstraint("event_id", "canonical_market_id", "selection_id", name="uq_sbs_selection"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(Integer, index=True)
+    market_category: Mapped[str] = mapped_column(String(32), index=True)
+    canonical_market_id: Mapped[str] = mapped_column(String(64))
+    selection_id: Mapped[str] = mapped_column(String(120))
+    line: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(32), index=True)  # WON | LOST | VOID | UNSETTLED_DATA_MISSING | UNSUPPORTED | ERROR
+    missing_fields: Mapped[list | None] = mapped_column(JSON(none_as_null=True))
+    result_source: Mapped[str | None] = mapped_column(String(32))
+    result: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    settlement_version: Mapped[str] = mapped_column(String(32))
+    settled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    error: Mapped[str | None] = mapped_column(String(300))
+
+
+class MarketMappingRegistry(Base):
+    """Todo `marketId` visto na oferta: MAPPED, OUT_OF_SCOPE (com motivo) ou UNKNOWN. Nada é ignorado em silêncio."""
+
+    __tablename__ = "market_mapping_registry"
+
+    superbet_market_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    market_name: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(16), index=True)  # MAPPED | OUT_OF_SCOPE | UNKNOWN | AMBIGUOUS
+    market_category: Mapped[str | None] = mapped_column(String(32))
+    reason: Mapped[str | None] = mapped_column(String(200))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    occurrences: Mapped[int] = mapped_column(Integer, default=0)
+    events_seen: Mapped[int] = mapped_column(Integer, default=0)
+    sample_selections: Mapped[list | None] = mapped_column(JSON(none_as_null=True))
+    specifier_keys: Mapped[list | None] = mapped_column(JSON(none_as_null=True))
+
+
+class DataQuarantine(Base):
+    __tablename__ = "data_quarantine"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    reason: Mapped[str] = mapped_column(String(40), index=True)  # DUPLICATE_SNAPSHOT, ODD_LE_1, NEGATIVE_TIMESTAMP, KICKOFF_INCONSISTENT, UNKNOWN_EVENT, UNKNOWN_SELECTION, MARKET_MAPPING_CONFLICT, SCHEMA_CHANGE
+    event_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    raw_snapshot_id: Mapped[int | None] = mapped_column(Integer)
+    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    payload_excerpt: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    detail: Mapped[str | None] = mapped_column(String(400))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    resolver_status: Mapped[str] = mapped_column(String(16), default="OPEN", index=True)  # OPEN | RESOLVED | IGNORED
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    resolution_note: Mapped[str | None] = mapped_column(String(400))
+
+
+class CollectorGap(Base):
+    """Intervalo sem coleta (engine parado, VM suspensa, fonte indisponível). Registado, nunca preenchido."""
+
+    __tablename__ = "collector_gap"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    ended_at: Mapped[datetime] = mapped_column(DateTime)
+    minutes: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(String(32))  # DOWNTIME | SOURCE_UNAVAILABLE | BLOCKED
+    events_affected: Mapped[int | None] = mapped_column(Integer)
+    detail: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ExperimentRegistry(Base):
+    """Hipóteses pré-registadas (antes do período de confirmação). BH-FDR sobre o conjunto em CONFIRMING."""
+
+    __tablename__ = "experiment_registry"
+
+    hypothesis_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    title: Mapped[str] = mapped_column(String(200))
+    market_category: Mapped[str] = mapped_column(String(32), index=True)
+    canonical_market_id: Mapped[str | None] = mapped_column(String(64))
+    competition: Mapped[str | None] = mapped_column(String(160))
+    odds_band: Mapped[str | None] = mapped_column(String(24))
+    time_window: Mapped[str | None] = mapped_column(String(24))  # bucket T-x
+    feature: Mapped[str] = mapped_column(String(64))  # ex.: superbet_fair_bias, edgefut_vs_fair, clv_at_bucket
+    expected_direction: Mapped[str] = mapped_column(String(8))  # + | - | 0
+    discovery_start: Mapped[datetime | None] = mapped_column(DateTime)
+    discovery_end: Mapped[datetime | None] = mapped_column(DateTime)
+    confirmation_start: Mapped[datetime] = mapped_column(DateTime)
+    confirmation_end: Mapped[datetime | None] = mapped_column(DateTime)
+    min_effective_n: Mapped[int] = mapped_column(Integer, default=200)
+    status: Mapped[str] = mapped_column(String(16), default="DISCOVERY", index=True)  # DISCOVERY | CANDIDATE | CONFIRMING | REJECTED | SUPPORTED
+    last_evaluation: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class ManualCorrection(Base):
+    """Trilha de qualquer alteração manual (mapeamento, quarentena, identidade, estado de mercado)."""
+
+    __tablename__ = "manual_correction"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity: Mapped[str] = mapped_column(String(48), index=True)
+    entity_id: Mapped[str] = mapped_column(String(80))
+    field: Mapped[str] = mapped_column(String(48))
+    before: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    after: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    reason: Mapped[str] = mapped_column(String(400))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MarketEdgeState(Base):
+    """Máquina de estados MARKET_EDGE por mercado (nunca global): UNPROVEN → COLLECTING → PROMISING → VALIDATED | REJECTED.
+    `value_enabled` só muda por ação explícita do utilizador (trilha em `manual_correction`)."""
+
+    __tablename__ = "market_edge_state"
+
+    market_category: Mapped[str] = mapped_column(String(32), primary_key=True)
+    state: Mapped[str] = mapped_column(String(16), default="UNPROVEN")
+    value_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    enablement_candidate: Mapped[bool] = mapped_column(Boolean, default=False)
+    evidence: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    history: Mapped[list | None] = mapped_column(JSON(none_as_null=True))

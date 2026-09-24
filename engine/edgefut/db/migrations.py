@@ -69,12 +69,37 @@ def _v4_shadow_market_aware(conn: Connection) -> None:
         _add_column(conn, "shadow_prediction", col, ddl)
 
 
+APPEND_ONLY_TABLES = ("raw_superbet_snapshot", "superbet_normalized_v1")
+
+
+def append_only_trigger_sql(table: str) -> list[str]:
+    """Triggers SQLite que tornam a tabela append-only: qualquer UPDATE/DELETE aborta.
+
+    Vale para qualquer cliente (ORM, sqlite3 CLI, ferramenta externa) — não só para o guard do
+    SQLAlchemy. Dados brutos nunca são editados; correções vivem em tabelas próprias.
+    """
+    return [
+        f"CREATE TRIGGER IF NOT EXISTS trg_{table}_no_update BEFORE UPDATE ON {table} BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END",
+        f"CREATE TRIGGER IF NOT EXISTS trg_{table}_no_delete BEFORE DELETE ON {table} BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END",
+    ]
+
+
+def _v5_data_flywheel(conn: Connection) -> None:
+    """Iteração 5: camadas raw/normalizada append-only (triggers), registo de mapeamento, quarentena,
+    lacunas do coletor, registo de experimentos, correções manuais, estado de edge por mercado.
+    As tabelas são criadas por `create_all`; aqui entram só os triggers e índices extra."""
+    for table in APPEND_ONLY_TABLES:
+        for sql in append_only_trigger_sql(table):
+            conn.execute(text(sql))
+
+
 MIGRATIONS: list[tuple[int, list[str | Callable[[Connection], None]]]] = [
     # (versão, [SQL ou callable...]) — adicionar novas entradas ao final, nunca editar as antigas.
     (1, []),
     (2, [_v2_identity_live_closing]),
     (3, [_v3_settlement_governance]),
     (4, [_v4_shadow_market_aware]),
+    (5, [_v5_data_flywheel]),
 ]
 
 
