@@ -281,7 +281,7 @@ def line_movement(tl: pd.DataFrame, top: int = 40) -> dict:
     topm = x.sort_values("abs", ascending=False).head(top)
     return {
         "by_market": by,
-        "top": [{"event_id": int(r.event_id), "competition": r.competition_name, "market": r.canonical_market_id, "selection": r.selection_id, "opening_odd": r.opening_odd, "closing_odd": r.closing_odd, "move_pp": round(float(r.move_pp), 2), "move_class": r.move_class, "n_obs": int(r.n_obs), "kickoff_utc": r.kickoff_utc} for r in topm.itertuples()],
+        "top": [{"event_id": int(r.event_id), "competition": r.competition_name, "market_category": r.market_category, "market": r.canonical_market_id, "selection": r.selection_id, "opening_odd": r.opening_odd, "closing_odd": r.closing_odd, "move_pp": round(float(r.move_pp), 2), "move_class": r.move_class, "n_obs": int(r.n_obs), "kickoff_utc": r.kickoff_utc} for r in topm.itertuples()],
         "note": f"STABLE |Δ|<{DRIFT_PP} pp · DRIFT ≥{DRIFT_PP} pp · STEAM ≥{STEAM_PP} pp com ≥60 % do movimento após T-3h. Descritivo: não se infere 'smart money'.",
     }
 

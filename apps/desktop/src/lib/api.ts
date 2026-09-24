@@ -39,6 +39,27 @@ import type {
   SuperbetEvidenceReport,
   SystemHealthResponse,
   VenueOverride,
+  BackupRow,
+  CollectorHealthReport,
+  CoverageReport,
+  EdgeStateRow,
+  ExportRow,
+  FlywheelReportEnvelope,
+  FlywheelSummary,
+  FreezeStatus,
+  IdentityAudit,
+  LeadLagReport,
+  LineMovementReport,
+  MappingReport,
+  QuarantineResponse,
+  ResearchReport,
+  SelectionTimelineResponse,
+  SettlementAudit,
+  StorageDashboard,
+  SuperbetLabResponse,
+  UnknownMarketRow,
+  HypothesisRow,
+  CollectorGapRow,
 } from "@edgefut/contracts";
 
 /** O engine escuta somente em loopback; a porta pode ser sobrescrita via VITE_ENGINE_PORT. */
@@ -162,4 +183,42 @@ export const api = {
   startHoldout: (run_id?: number) =>
     request<{ ok: boolean; started?: boolean; correlation_id?: string }>("/validation/market-aware/holdout", { method: "POST", body: JSON.stringify({ run_id: run_id ?? null, force: false }) }),
   superbetEvidence: (live = false) => request<SuperbetEvidenceReport>(`/validation/superbet${qs({ live })}`),
+
+  // Iteração 5 — SUPERBET DATA FLYWHEEL (leitura; ações explícitas registadas com motivo)
+  flywheelSummary: () => request<FlywheelSummary>("/flywheel/summary"),
+  collectorHealth: () => request<CollectorHealthReport>("/flywheel/collector/health"),
+  flywheelCoverage: (p: { days?: number; limit?: number } = {}) => request<CoverageReport>(`/flywheel/coverage${qs(p)}`),
+  flywheelGaps: () => request<{ gaps: CollectorGapRow[]; note: string }>("/flywheel/gaps"),
+  flywheelMapping: () => request<MappingReport>("/flywheel/mapping"),
+  unknownMarkets: () => request<{ markets: UnknownMarketRow[]; note: string }>("/flywheel/mapping/unknown"),
+  decideMapping: (market_id: number, body: { status: "OUT_OF_SCOPE" | "UNKNOWN" | "AMBIGUOUS"; reason: string }) =>
+    request<Record<string, unknown>>(`/flywheel/mapping/${market_id}`, { method: "POST", body: JSON.stringify(body) }),
+  quarantine: (status: "OPEN" | "RESOLVED" | "IGNORED" | "ALL" = "OPEN") => request<QuarantineResponse>(`/flywheel/quarantine${qs({ status })}`),
+  resolveQuarantine: (id: number, body: { status: "RESOLVED" | "IGNORED" | "OPEN"; note: string }) =>
+    request<Record<string, unknown>>(`/flywheel/quarantine/${id}/resolve`, { method: "POST", body: JSON.stringify(body) }),
+  rawSnapshot: (id: number) => request<Record<string, unknown>>(`/flywheel/raw/${id}`),
+  settlementAudit: () => request<SettlementAudit>("/flywheel/settlement/audit"),
+  settlementEvent: (event_id: number) => request<{ event_id: number; items: Record<string, unknown>[] }>(`/flywheel/settlement/event/${event_id}`),
+  research: () => request<ResearchReport>("/flywheel/research"),
+  runResearch: () => request<Record<string, unknown>>("/flywheel/research/run", { method: "POST" }),
+  superbetLab: (p: { category?: string; competition?: string; odds_band?: string; target?: string; line?: number; days?: number; limit?: number }) =>
+    request<SuperbetLabResponse>(`/flywheel/research/lab${qs(p)}`),
+  movement: (p: { category?: string; days?: number; top?: number } = {}) =>
+    request<{ movement: LineMovementReport; lead_lag: LeadLagReport; note: string }>(`/flywheel/research/movement${qs(p)}`),
+  selectionTimeline: (event_id: number, category?: string) => request<SelectionTimelineResponse>(`/flywheel/research/selection/${event_id}${qs({ category })}`),
+  experiments: () => request<{ hypotheses: (HypothesisRow & { last_evaluation: HypothesisRow | null; evaluated_at: string | null; notes: string | null })[]; note: string }>("/flywheel/experiments"),
+  edgeStates: () => request<{ states: EdgeStateRow[]; value_enabled_default: boolean; staking: { enabled: boolean; reason: string | null }; rules: { min_effective_n: number; confirmation_min_days: number } }>("/flywheel/edge-states"),
+  toggleValue: (category: string, body: { enabled: boolean; reason: string }) =>
+    request<EdgeStateRow>(`/flywheel/edge-states/${category}/value`, { method: "POST", body: JSON.stringify(body) }),
+  freeze: () => request<FreezeStatus>("/flywheel/freeze"),
+  storage: () => request<StorageDashboard>("/flywheel/storage"),
+  backups: () => request<{ backups: BackupRow[]; retention: Record<string, number>; dir: string }>("/flywheel/backups"),
+  runBackup: () => request<Record<string, unknown>>("/flywheel/backups/run", { method: "POST" }),
+  restoreBackup: (file: string) => request<Record<string, unknown>>("/flywheel/backups/restore", { method: "POST", body: JSON.stringify({ file, confirm: true }) }),
+  exports: () => request<{ exports: ExportRow[]; dir: string }>("/flywheel/exports"),
+  runExport: (body: { layers: string[]; format: "parquet" | "csv" }) => request<Record<string, unknown>>("/flywheel/exports/run", { method: "POST", body: JSON.stringify(body) }),
+  reportDaily: () => request<FlywheelReportEnvelope>("/flywheel/reports/daily"),
+  reportWeekly: () => request<FlywheelReportEnvelope>("/flywheel/reports/weekly"),
+  runReport: (kind: "daily" | "weekly") => request<Record<string, unknown>>(`/flywheel/reports/${kind}/run`, { method: "POST" }),
+  identityAudit: () => request<IdentityAudit>("/flywheel/identity"),
 };

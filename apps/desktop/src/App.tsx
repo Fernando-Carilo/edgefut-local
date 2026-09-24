@@ -5,13 +5,17 @@ import { Layout } from "@/components/Layout";
 import { BootGate } from "@/components/Onboarding";
 import { BacktestPage } from "@/pages/BacktestPage";
 import { Dashboard } from "@/pages/Dashboard";
+import { DataPages } from "@/pages/DataPages";
 import { EntriesPage } from "@/pages/EntriesPage";
 import { EventsPage } from "@/pages/EventsPage";
+import { FlywheelPage } from "@/pages/FlywheelPage";
 import { MatchPage } from "@/pages/MatchPage";
 import { FavoritesPage, HistoryPage, LivePage, ModelsPage, PerformancePage, SourcesPage } from "@/pages/MiscPages";
 import { MultiplesPage } from "@/pages/MultiplesPage";
 import { RadarPage } from "@/pages/RadarPage";
+import { ResearchPage } from "@/pages/ResearchPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { SuperbetLabPage } from "@/pages/SuperbetLabPage";
 import { AlertsPage, DiagnosticsPage, JobsPage } from "@/pages/SystemPages";
 import { ValidationPage } from "@/pages/ValidationPage";
 
@@ -40,7 +44,11 @@ export function App() {
               <Route path="modelos" element={<ModelsPage />} />
               <Route path="performance" element={<PerformancePage />} />
               <Route path="validacao" element={<ValidationPage />} />
+              <Route path="flywheel" element={<FlywheelPage />} />
+              <Route path="superbet-lab" element={<SuperbetLabPage />} />
+              <Route path="pesquisa" element={<ResearchPage />} />
               <Route path="alertas" element={<AlertsPage />} />
+              <Route path="sistema/dados" element={<DataPages />} />
               <Route path="sistema/jobs" element={<JobsPage />} />
               <Route path="sistema/diagnostico" element={<DiagnosticsPage />} />
               <Route path="configuracoes" element={<SettingsPage />} />

@@ -60,6 +60,7 @@ const LABEL_CLS: Record<OpportunityLabel, string> = {
   MODEL_FAVORITE: "bg-info-50 text-info",
   HIGH_PROBABILITY_VALUE: "bg-success-50 text-success",
   VALUE_CANDIDATE: "bg-primary-50/60 text-primary",
+  RESEARCH_SIGNAL: "bg-info-50 text-info",
   MODEL_ONLY: "bg-warning-50 text-warning",
   WATCH: "bg-gray-100 text-ink-2",
   NO_BET: "bg-gray-100 text-ink-3",
@@ -72,6 +73,7 @@ const LABEL_TIP: Record<OpportunityLabel, string> = {
   VALUE_CANDIDATE: "VALUE CANDIDATE: passou no quality gate, mas este mercado ainda não tem prova out-of-sample suficiente (N mínimo configurável).",
   MODEL_ONLY: "MODEL ONLY: probabilidade calculada, mas sem preço de mercado válido para determinar valor. Nunca vira VALUE nem entra em ROI.",
   WATCH: "WATCH: edge existe, mas ficou em observação (gate, confiança C, OOS negativa ou preço curto).",
+  RESEARCH_SIGNAL: "RESEARCH SIGNAL: o modelo vê edge, mas VALUE está desativado neste mercado até validação contra a Superbet (Pesquisa → estado do mercado). Observar preço e movimento — não é recomendação.",
   NO_BET: "NO BET: sem entrada.",
 };
 
@@ -87,6 +89,7 @@ export function LabelChip({ label }: { label: OpportunityLabel | null | undefine
 const STATE_CLS: Record<RecommendationState, string> = {
   VALUE: "bg-primary-50 text-primary",
   VALUE_CANDIDATE: "bg-primary-50/60 text-primary",
+  RESEARCH_SIGNAL: "bg-info-50 text-info",
   OBSERVATION: "bg-warning-50 text-warning",
   MODEL_ONLY: "bg-warning-50 text-warning",
   MARKET_OBSERVED: "bg-gray-100 text-ink-2",

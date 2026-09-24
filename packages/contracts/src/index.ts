@@ -18,7 +18,8 @@ export type NoBetReason =
   | "EXTREME_ODDS_MOVEMENT"
   | "UNSUPPORTED_COMPETITION"
   | "STALE_DATA"
-  | "QUALITY_GATE";
+  | "QUALITY_GATE"
+  | "VALUE_DISABLED";
 export type Category = "GOLS" | "RESULTADO" | "ESCANTEIOS" | "CARTOES" | "FINALIZACOES" | "JOGADOR" | "OUTRO";
 export type FreshnessStatus = "FRESH" | "AGING" | "STALE" | "EXPIRED" | "UNAVAILABLE";
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "STALE" | "UNAVAILABLE";
@@ -31,9 +32,11 @@ export type OpportunityLabel =
   | "MODEL_ONLY"
   | "WATCH"
   | "VALUE_CANDIDATE"
+  | "RESEARCH_SIGNAL"
   | "NO_BET";
-/** Estado de uma seleção (iteração 3, §22). MODEL_ONLY nunca vira VALUE nem gera ROI. */
-export type RecommendationState = "MODEL_ONLY" | "MARKET_OBSERVED" | "VALUE_CANDIDATE" | "VALUE" | "OBSERVATION" | "NO_BET";
+/** Estado de uma seleção (iteração 3, §22). MODEL_ONLY nunca vira VALUE nem gera ROI.
+ *  Iteração 5: RESEARCH_SIGNAL = o modelo vê edge, mas VALUE está desativado neste mercado até validação Superbet. */
+export type RecommendationState = "MODEL_ONLY" | "MARKET_OBSERVED" | "VALUE_CANDIDATE" | "VALUE" | "RESEARCH_SIGNAL" | "OBSERVATION" | "NO_BET";
 export type SampleQuality = "INSUFFICIENT" | "EARLY" | "MODERATE" | "STRONG";
 export type Significance = "INSUFFICIENT DATA" | "NO CLEAR ADVANTAGE" | "PROMISING" | "CONSISTENT";
 export type ExposureLevel = "LOW" | "MEDIUM" | "HIGH";
@@ -745,6 +748,7 @@ export interface RadarSummary {
   gate_passed_by_evidence: Partial<Record<EvidenceLevel, number>>;
   events_by_state: Record<string, number>;
   value_candidates: number;
+  research_signals?: number;
   model_only: number;
   actionable_clusters: number;
   selections_actionable: number;
@@ -799,6 +803,7 @@ export interface DashboardResponse {
   model_health: ModelHealth | null;
   value: number;
   value_candidates: number;
+  research_signals?: number;
   model_only: number;
   actionable_clusters: number;
 }
@@ -886,6 +891,9 @@ export interface StakeResponse {
   kelly_full_pct: number;
   kelly_fraction_used: number;
   warning: string | null;
+  /** Iteração 5 §64 — staking DISABLED enquanto nenhum mercado tiver MARKET_EDGE = VALIDATED. */
+  disabled?: boolean;
+  disabled_reason?: string | null;
 }
 
 export interface MultipleLeg {
@@ -945,6 +953,11 @@ export interface SettingsModel {
   gate_max_edge_pp_uncalibrated: number;
   high_probability_min: number;
   opportunity_weights: Record<string, number>;
+  /** Iteração 5 §46–§47 — Windows always-on (lidas pelo shell Tauri). */
+  background_collector?: boolean;
+  autostart_on_login?: boolean;
+  notifications_enabled?: boolean;
+  backup_enabled?: boolean;
 }
 
 export interface BootstrapStep {
@@ -1743,6 +1756,7 @@ export const NO_BET_LABELS: Record<NoBetReason, string> = {
   UNSUPPORTED_COMPETITION: "Competição não suportada",
   STALE_DATA: "Dados expirados",
   QUALITY_GATE: "Quality gate",
+  VALUE_DISABLED: "VALUE desativado (research signal)",
 };
 
 export const FRESHNESS_LABELS: Record<FreshnessStatus, string> = {
@@ -1768,6 +1782,7 @@ export const LABEL_TEXT: Record<OpportunityLabel, string> = {
   MODEL_ONLY: "MODEL ONLY",
   WATCH: "WATCH",
   VALUE_CANDIDATE: "VALUE CANDIDATE",
+  RESEARCH_SIGNAL: "RESEARCH SIGNAL",
   NO_BET: "NO BET",
 };
 
@@ -1776,6 +1791,7 @@ export const STATE_LABELS: Record<RecommendationState, string> = {
   MARKET_OBSERVED: "MARKET OBSERVED",
   VALUE_CANDIDATE: "VALUE CANDIDATE",
   VALUE: "VALUE",
+  RESEARCH_SIGNAL: "RESEARCH SIGNAL",
   OBSERVATION: "OBSERVATION",
   NO_BET: "NO BET",
 };
@@ -1801,3 +1817,455 @@ export const CONFIDENCE_GROUP_LABELS: Record<ConfidenceGroup, string> = {
   FRESHNESS: "Frescor",
   CONTEXT: "Contexto",
 };
+
+// ---------------------------------------------------------------------------
+// Iteração 5 — SUPERBET DATA FLYWHEEL & SPECIALIZED MARKET DISCOVERY
+// ---------------------------------------------------------------------------
+export type MarketCategory =
+  | "MATCH_RESULT"
+  | "DOUBLE_CHANCE"
+  | "DNB"
+  | "TOTAL_GOALS"
+  | "BTTS"
+  | "TEAM_TOTAL"
+  | "CORNERS_TOTAL"
+  | "TEAM_CORNERS"
+  | "CARDS_TOTAL"
+  | "TEAM_CARDS"
+  | "SHOTS"
+  | "SHOTS_ON_TARGET"
+  | "PLAYER_GOAL"
+  | "PLAYER_SHOTS"
+  | "PLAYER_SOT";
+export type CollectorHealth = "HEALTHY" | "DEGRADED" | "BROKEN";
+export type MarketMaturity = "COLLECTING" | "EARLY" | "TESTABLE" | "MATURE";
+export type MarketEdgeStateKind = "UNPROVEN" | "COLLECTING" | "PROMISING" | "VALIDATED" | "REJECTED";
+export type ExperimentStatus = "DISCOVERY" | "CANDIDATE" | "CONFIRMING" | "REJECTED" | "SUPPORTED";
+export type SettlementStatus = "WON" | "LOST" | "VOID" | "UNSETTLED_DATA_MISSING" | "UNSUPPORTED" | "ERROR";
+export type MoveClass = "STEAM" | "DRIFT" | "STABLE";
+
+export const MARKET_CATEGORY_LABELS: Record<MarketCategory, string> = {
+  MATCH_RESULT: "Resultado final (1X2)",
+  DOUBLE_CHANCE: "Dupla chance",
+  DNB: "Empate anula",
+  TOTAL_GOALS: "Total de gols",
+  BTTS: "Ambas marcam",
+  TEAM_TOTAL: "Gols por equipe",
+  CORNERS_TOTAL: "Escanteios (total)",
+  TEAM_CORNERS: "Escanteios por equipe",
+  CARDS_TOTAL: "Cartões (total)",
+  TEAM_CARDS: "Cartões por equipe",
+  SHOTS: "Finalizações",
+  SHOTS_ON_TARGET: "Finalizações no alvo",
+  PLAYER_GOAL: "Jogador marca",
+  PLAYER_SHOTS: "Finalizações do jogador",
+  PLAYER_SOT: "Finalizações no alvo do jogador",
+};
+export const MATURITY_LABELS: Record<MarketMaturity, string> = { COLLECTING: "COLLECTING", EARLY: "EARLY", TESTABLE: "TESTABLE", MATURE: "MATURE" };
+export const EDGE_STATE_LABELS: Record<MarketEdgeStateKind, string> = { UNPROVEN: "UNPROVEN", COLLECTING: "COLLECTING", PROMISING: "PROMISING", VALIDATED: "VALIDATED", REJECTED: "REJECTED" };
+
+export interface StripItem {
+  key: "model" | "market" | "collector";
+  text: string;
+  tone: "ok" | "warn" | "bad";
+}
+export interface CoverageTargetRow {
+  target: string;
+  expected: number;
+  observed: number;
+  pct: number | null;
+}
+export interface CoverageMarketRow {
+  market_category: MarketCategory;
+  expected: number;
+  observed: number;
+  pct: number | null;
+}
+export interface CoverageEventRow {
+  event_id: number;
+  label: string;
+  competition: string | null;
+  kickoff_utc: string;
+  first_seen_at: string | null;
+  expected: string[];
+  observed: string[];
+  coverage_pct: number | null;
+  raw_snapshots: number;
+  markets: string[];
+}
+export interface CoverageReport {
+  generated_at: string;
+  window_days: number;
+  events: number;
+  expected: number;
+  observed: number;
+  coverage_pct: number | null;
+  by_target: CoverageTargetRow[];
+  by_market: CoverageMarketRow[];
+  per_event: CoverageEventRow[];
+  note: string;
+}
+export interface CollectorRequestStats {
+  requests: number;
+  success: number;
+  cached: number;
+  errors: number;
+  blocked: number;
+  rate_limited: number;
+  timeouts: number;
+  http_5xx: number;
+  latency_ms_p50: number | null;
+  success_rate: number | null;
+}
+export interface CollectorRawStats {
+  snapshots: number;
+  events: number;
+  last_fetched_at: string | null;
+  odds_total: number;
+  odds_mapped: number;
+  odds_unknown: number;
+  odds_out_of_scope: number;
+  parse_failures: number;
+  parse_rate: number | null;
+  mapping_coverage: number | null;
+  unknown_share: number | null;
+  schema_issue_snapshots: number;
+  payload_bytes: number;
+}
+export interface CollectorHealthReport {
+  generated_at: string;
+  health: CollectorHealth;
+  reasons: string[];
+  cadence_minutes: number;
+  last_fetched_at: string | null;
+  stale_minutes: number | null;
+  upcoming_events: number;
+  last_hour: { requests: CollectorRequestStats; raw: CollectorRawStats };
+  last_24h: { requests: CollectorRequestStats; raw: CollectorRawStats };
+  gaps_7d: number;
+  quarantine_open: number;
+}
+export interface CollectorGapRow {
+  id: number;
+  started_at: string;
+  ended_at: string;
+  minutes: number;
+  reason: string;
+  events_affected: number;
+  detail: string | null;
+}
+export interface MarketDataCoverageRow {
+  market_category: MarketCategory;
+  events_with_snapshots: number;
+  snapshots: number;
+  events_settled: number;
+  settled: number;
+  missing: number;
+  unsupported: number;
+  error: number;
+  void: number;
+}
+export interface SettlementAudit {
+  generated_at: string;
+  settlement_version: string;
+  events: { finished: number; settled: number; pending: number; missing_result: number; missing_market_stats: number; errors: number };
+  match_result_vs_secondary: { match_result: { settled: number; missing: number }; secondary: { settled: number; missing: number } };
+  market_data_coverage: MarketDataCoverageRow[];
+  missing_by_market: { market_category: string; missing_fields: string; n: number }[];
+}
+export interface FlywheelMarketRow {
+  market_category: MarketCategory;
+  label: string;
+  family?: string;
+  selections_observed: number;
+  events_observed: number;
+  raw_n: number;
+  unique_events: number;
+  effective_n: number;
+  maturity: MarketMaturity;
+  overround_median_pct?: number | null;
+  edgefut_vs_fair?: "EDGEFUT" | "SUPERBET" | "INCONCLUSIVE" | "INSUFFICIENT";
+  edge_state: MarketEdgeStateKind;
+  value_enabled: boolean;
+  enablement_candidate: boolean;
+}
+export interface FlywheelSummary {
+  generated_at: string;
+  strip: StripItem[];
+  versions: { source: string; normalizer: string; settlement: string; dataset: string };
+  dataset: {
+    unique_events: number;
+    raw_snapshots: number;
+    normalized_rows: number;
+    settled_selections: number;
+    first_snapshot_at: string | null;
+    by_event_state: Record<string, number>;
+    daily: { day: string; snapshots: number; events: number }[];
+  };
+  collector: Partial<CollectorHealthReport>;
+  coverage: { window_days: number; expected: number; observed: number; coverage_pct: number | null; by_target: CoverageTargetRow[]; by_market: CoverageMarketRow[]; note: string };
+  mapping: { market_ids: number; by_status: Record<string, number>; occurrences_by_status: Record<string, number>; mapped_pct: number | null; unknown_pct: number | null; unknown_count: number };
+  settlement: Pick<SettlementAudit, "events" | "match_result_vs_secondary" | "market_data_coverage">;
+  markets: FlywheelMarketRow[];
+  research_generated_at: string | null;
+  gaps: CollectorGapRow[];
+  quarantine_open: number;
+  storage: { sqlite_bytes?: number; raw_compressed_bytes?: number; raw_bytes_per_day?: number; backups?: number; latest_backup?: string | null; error?: string };
+  freeze: string | null;
+  value_enabled: boolean;
+  staking: { enabled: boolean; reason: string | null };
+  research_only: string;
+}
+export interface UnknownMarketRow {
+  superbet_market_id: number;
+  market_name: string | null;
+  status: string;
+  reason: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  occurrences: number;
+  events_seen: number;
+  sample_selections: string[] | null;
+  specifier_keys: string[] | null;
+}
+export interface MappingReport {
+  market_ids: number;
+  by_status: Record<string, number>;
+  occurrences_by_status: Record<string, number>;
+  mapped_pct: number | null;
+  unknown_pct: number | null;
+  unknown: UnknownMarketRow[];
+  out_of_scope_reasons: Record<string, number>;
+  mapped_spec: { superbet_market_id: number; market_category: MarketCategory; kind: string; side: string | null; label: string }[];
+  out_of_scope_patterns: { reason: string; pattern: string }[];
+  targets: { name: string; minutes: number; window: [number, number] }[];
+}
+export interface QuarantineItem {
+  id: number;
+  reason: string;
+  event_id: number | null;
+  raw_snapshot_id: number | null;
+  payload_hash: string | null;
+  payload_excerpt: Record<string, unknown> | null;
+  detail: string;
+  created_at: string;
+  resolver_status: "OPEN" | "RESOLVED" | "IGNORED";
+  resolved_at: string | null;
+  resolution_note: string | null;
+}
+export interface QuarantineResponse {
+  items: QuarantineItem[];
+  open_by_reason: Record<string, number>;
+  note: string;
+}
+export interface IntervalDict {
+  point: number | null;
+  low: number | null;
+  high: number | null;
+  n: number;
+  conclusive: boolean | null;
+}
+export interface ScoreBlock {
+  n?: number;
+  brier?: number | null;
+  logloss?: number | null;
+  calibration_bias_pp?: IntervalDict | null;
+  [k: string]: unknown;
+}
+export interface DiscoveryRow extends FlywheelMarketRow {
+  clv_near_close?: { clv_raw_pct?: IntervalDict; clv_fair_pp?: IntervalDict } | null;
+  superbet_fair?: ScoreBlock | null;
+  simple_baseline?: ScoreBlock | null;
+  edgefut?: ScoreBlock | null;
+  delta_brier_edgefut_vs_fair?: IntervalDict | null;
+  verdict?: string;
+}
+export interface HypothesisEval {
+  n: number;
+  events: number;
+  effective_n: number;
+  unit?: string;
+  estimate?: number;
+  ci?: IntervalDict;
+  p_value?: number;
+  label?: string;
+}
+export interface HypothesisRow {
+  hypothesis_id: string;
+  title: string;
+  market_category: MarketCategory;
+  feature: string;
+  expected_direction: "+" | "-" | "0";
+  odds_band: string | null;
+  time_window: string | null;
+  confirmation_start: string | null;
+  min_effective_n: number;
+  status_before: ExperimentStatus;
+  status: ExperimentStatus;
+  sample_label: "SMALL SAMPLE" | "ADEQUATE";
+  confirmation: HypothesisEval;
+  discovery: HypothesisEval;
+  fdr_adjusted_p?: number;
+  survives_fdr?: boolean;
+  history?: { at: string; from: string; to: string }[];
+}
+export interface EdgeStateRow {
+  market_category: MarketCategory;
+  label: string;
+  state: MarketEdgeStateKind;
+  value_enabled: boolean;
+  enablement_candidate: boolean;
+  evidence: {
+    rules_ok?: string[];
+    rules_failed?: string[];
+    maturity?: MarketMaturity;
+    effective_n?: number;
+    raw_n?: number;
+    unique_events?: number;
+    required_edge_v2?: { required_edge_pp: number; components: Record<string, number>; market_error_measured: boolean };
+    confidence?: string;
+    settled_share?: number;
+  } | null;
+  updated_at: string | null;
+  history: { at: string; from: string; to: string; value_enabled?: boolean; manual?: boolean }[];
+}
+export interface FreezeStatus {
+  freeze: { freeze_date: string; model_hash: string; config_hash: string; dataset_version: string; frozen_models: string[]; paused: Record<string, string>; forbidden_families: string[]; iteration: number; note: string };
+  current: { model_hash: string; config_hash: string; dataset_version: string };
+  status: "INTACT" | "DRIFTED";
+  drifted_fields: string[];
+  dataset_changed: boolean;
+  note: string;
+}
+export interface MovementRow {
+  event_id: number;
+  market_category: MarketCategory;
+  market: string; // canonical_market_id
+  selection: string; // selection_id
+  competition?: string | null;
+  kickoff_utc?: string;
+  opening_odd?: number | null;
+  closing_odd?: number | null;
+  move_pp?: number | null;
+  move_class?: MoveClass | null;
+  n_obs?: number;
+  [k: string]: unknown;
+}
+export interface LineMovementReport {
+  by_market: { market_category: MarketCategory; n: number; events: number; steam: number; drift: number; stable: number; abs_move_pp_median?: number; abs_move_pp_p90?: number; opening_minutes_median?: number }[];
+  counts?: Record<string, number>;
+  top: MovementRow[];
+  note?: string;
+}
+export interface LeadLagReport {
+  verdict: string;
+  all?: Record<string, unknown>;
+  rows: Record<string, unknown>[];
+  by_bucket?: Record<string, unknown>[];
+  note?: string;
+}
+export interface ResearchReport {
+  available: boolean;
+  generated_at?: string;
+  duration_ms?: number;
+  research_only?: string;
+  versions?: Record<string, string>;
+  frames?: Record<string, number>;
+  margin_lab?: { by_market: Record<string, unknown>[]; by_market_line?: Record<string, unknown>[]; by_competition?: Record<string, unknown>[]; by_odds_band?: Record<string, unknown>[]; by_time_to_kickoff?: Record<string, unknown>[]; note?: string };
+  price_efficiency?: { rows: Record<string, unknown>[]; note?: string };
+  clv_v2?: { rows: Record<string, unknown>[]; note?: string };
+  line_movement?: LineMovementReport;
+  lead_lag?: LeadLagReport;
+  discovery?: DiscoveryRow[];
+  experiments?: { generated_at: string; q: number; tested: number; survivors: string[]; hypotheses: HypothesisRow[]; note: string };
+  edge_states?: EdgeStateRow[];
+  freeze?: FreezeStatus;
+  settlement_audit?: SettlementAudit;
+  note?: string;
+}
+export interface SelectionPoint {
+  fetched_at: string;
+  minutes_to_kickoff: number | null;
+  odd: number;
+  implied_prob: number;
+  fair_prob: number | null;
+  overround: number | null;
+  snapshot_target: string | null;
+  event_state: string;
+}
+export interface SelectionSeries {
+  canonical_market_id: string;
+  selection_id: string;
+  selection_name: string;
+  market_category: MarketCategory;
+  line: number | null;
+  points: SelectionPoint[];
+  opening: SelectionPoint | null;
+  closing: SelectionPoint | null;
+  move_pp: number | null;
+  classification: MoveClass | null;
+  edgefut_prob: number | null;
+  n_obs: number;
+}
+export interface SelectionTimelineResponse {
+  event_id: number;
+  label: string | null;
+  kickoff_utc: string | null;
+  series: SelectionSeries[];
+  note: string;
+}
+export interface StorageDashboard {
+  generated_at: string;
+  sqlite: { bytes: number; wal_bytes: number; path: string; page_size?: number; page_count?: number; freelist_pages?: number; free_bytes?: number };
+  raw_payloads: { snapshots: number; compressed_bytes: number; uncompressed_bytes: number; compression_ratio: number | null; last_24h_bytes: number; last_24h_snapshots: number; last_7d_bytes: number; first_snapshot_at: string | null; days_active: number | null };
+  growth: { raw_bytes_per_day: number; raw_snapshots_per_day: number; projection_30d_bytes: number; projection_365d_bytes: number };
+  parquet: { bytes: number; path: string };
+  cache: { bytes: number; files: number };
+  backups: { bytes: number; count: number; latest: BackupRow | null; retention: Record<string, number> };
+  exports: { bytes: number; count: number };
+  logs: { bytes: number };
+  counts: Record<string, number>;
+  raw_retention_policy: string;
+}
+export interface BackupRow {
+  file: string;
+  created_at: string;
+  bytes: number;
+  integrity: string | null;
+  schema_version: number | null;
+  counts: Record<string, number> | null;
+  reason: string | null;
+  tier: string | null;
+}
+export interface ExportRow {
+  dir: string;
+  path: string;
+  bytes: number;
+  created_at: string | null;
+  format: string | null;
+  files: Record<string, { file: string; rows: number; bytes: number }> | null;
+}
+export interface FlywheelReportEnvelope<T = Record<string, unknown>> {
+  available: boolean;
+  report: T | null;
+  history: { id: number; created_at: string; summary: Record<string, unknown> | null; duration_ms: number | null }[];
+}
+export interface IdentityAudit {
+  generated_at: string;
+  events: { duplicates_merged: number; without_canonical_id: number; kickoff_inconsistent_quarantined: number; unknown_event_payloads: number };
+  competitions_30d: { competition_name: string | null; events: number }[];
+  player_identity: { by_confidence: Record<string, number>; note: string };
+  manual_corrections: { id: number; entity: string; entity_id: string; field: string; before: unknown; after: unknown; reason: string; created_at: string }[];
+}
+export interface SuperbetLabResponse {
+  filters: Record<string, unknown>;
+  n: number;
+  events?: number;
+  selections?: number;
+  margin?: Record<string, unknown>;
+  clv?: { rows: Record<string, unknown>[]; note?: string };
+  movement?: { by_market: Record<string, unknown>[] | undefined; counts: Record<string, number> | undefined };
+  rows: MovementRow[];
+  options?: { categories: MarketCategory[]; competitions: string[]; targets: string[]; odds_bands: string[] };
+  note: string;
+}

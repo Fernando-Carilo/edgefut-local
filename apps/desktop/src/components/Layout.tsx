@@ -3,15 +3,19 @@ import clsx from "clsx";
 import {
   Activity,
   BarChart3,
+  Beaker,
   Bell,
   Calendar,
   Database,
   FlaskConical,
+  HardDrive,
   Heart,
   History,
   Home,
   Layers,
   ListChecks,
+  Microscope,
+  Orbit,
   Radar,
   Search,
   Settings,
@@ -25,6 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { HEALTH_LABELS } from "@edgefut/contracts";
+import { relativeTime } from "@edgefut/shared";
 
 import { api } from "@/lib/api";
 import { useUi } from "@/store/ui";
@@ -55,12 +60,16 @@ const nav: { title: string | null; items: NavItem[] }[] = [
       { to: "/modelos", label: "Modelos", icon: Activity },
       { to: "/performance", label: "Performance", icon: BarChart3 },
       { to: "/validacao", label: "Validação", icon: ShieldCheck },
+      { to: "/flywheel", label: "Data Flywheel", icon: Orbit },
+      { to: "/superbet-lab", label: "Superbet Lab", icon: Microscope },
+      { to: "/pesquisa", label: "Pesquisa", icon: Beaker },
     ],
   },
   {
     title: "Sistema",
     items: [
       { to: "/alertas", label: "Alertas", icon: Bell },
+      { to: "/sistema/dados", label: "Dados", icon: HardDrive },
       { to: "/sistema/jobs", label: "Jobs", icon: ListChecks },
       { to: "/sistema/diagnostico", label: "Diagnóstico", icon: Stethoscope },
       { to: "/configuracoes", label: "Configurações", icon: Settings },
@@ -75,6 +84,7 @@ export function Layout() {
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15000, retry: 1 });
   const sys = useQuery({ queryKey: ["system-health"], queryFn: api.systemHealth, refetchInterval: 30000, retry: 1 });
   const alerts = useQuery({ queryKey: ["alerts", "unread-count"], queryFn: () => api.alerts({ limit: 1, unread_only: true }), refetchInterval: 30000, retry: 1 });
+  const collector = useQuery({ queryKey: ["flywheel", "collector-health"], queryFn: api.collectorHealth, refetchInterval: 60000, retry: 1 });
   const searchRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -135,6 +145,20 @@ export function Layout() {
             {!collapsed && <span className="text-ink-2">{online ? (radarRunning ? "Analisando jogos…" : "Engine local ativo") : "Engine offline"}</span>}
           </div>
           {!collapsed && online && <div className="mt-1 text-[10px] text-ink-3">127.0.0.1:{health.data?.port} · v{health.data?.version}</div>}
+          {online && collector.data && (
+            <button
+              className="mt-1.5 flex w-full items-center gap-2 text-left"
+              title={`Coletor Superbet: ${collector.data.health}${collector.data.reasons.length ? " — " + collector.data.reasons.join("; ") : ""} · último snapshot ${collector.data.last_fetched_at ? relativeTime(collector.data.last_fetched_at) : "nunca"}`}
+              onClick={() => navigate("/flywheel")}
+            >
+              <span className={clsx("h-2 w-2 shrink-0 rounded-full", collector.data.health === "HEALTHY" ? "bg-success" : collector.data.health === "DEGRADED" ? "bg-warning" : "bg-danger")} />
+              {!collapsed && (
+                <span className="truncate text-[10px] text-ink-3">
+                  Coletor {collector.data.health} · {collector.data.last_fetched_at ? relativeTime(collector.data.last_fetched_at) : "sem snapshot"}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </aside>
 

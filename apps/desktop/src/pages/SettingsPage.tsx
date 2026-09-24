@@ -156,6 +156,39 @@ export function SettingsPage() {
             </F>
           </div>
         </Card>
+        <Card className="border-primary/30 bg-primary-50/40">
+          <SectionTitle title="Coletor em segundo plano (Windows)" subtitle="O dataset Superbet só cresce enquanto o app está rodando. Estas opções mantêm o coletor vivo mesmo com a janela fechada." />
+          <div className="space-y-2 text-sm">
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="mt-0.5" checked={form.background_collector} onChange={(e) => set("background_collector", e.target.checked)} />
+              <span>
+                <b>Manter coletor em segundo plano</b>
+                <span className="block text-xs text-ink-2">Fechar a janela esconde o app na bandeja do sistema; o motor local e os jobs continuam. Para encerrar tudo use “Sair” no ícone da bandeja.</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="mt-0.5" checked={form.autostart_on_login} onChange={(e) => set("autostart_on_login", e.target.checked)} />
+              <span>
+                <b>Iniciar com o Windows</b>
+                <span className="block text-xs text-ink-2">Opcional. Registra o EdgeFut para arrancar no login (minimizado na bandeja). Após qualquer parada, o gap de coleta é registrado — nunca preenchido com dados fabricados.</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="mt-0.5" checked={form.notifications_enabled} onChange={(e) => set("notifications_enabled", e.target.checked)} />
+              <span>
+                <b>Notificações locais</b>
+                <span className="block text-xs text-ink-2">Coletor degradado, schema Superbet alterado, liquidação concluída, research signal, alvo de preço. Nunca “BET NOW”.</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="mt-0.5" checked={form.backup_enabled} onChange={(e) => set("backup_enabled", e.target.checked)} />
+              <span>
+                <b>Backup diário automático</b>
+                <span className="block text-xs text-ink-2">Retenção 7 diários · 4 semanais · 3 mensais, com verificação de integridade. O raw nunca é apagado automaticamente.</span>
+              </span>
+            </label>
+          </div>
+        </Card>
         <Card>
           <SectionTitle title="Ollama (opcional)" subtitle="Só reescreve explicações a partir dos fatos calculados. Nunca gera estatísticas." />
           <label className="flex items-center gap-2 text-sm">

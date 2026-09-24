@@ -9,12 +9,16 @@ import { EventRow, RecommendationCard } from "@/components/EventCard";
 import { Card, Counter, Empty, ErrorBox, HealthChip, Loading, SectionTitle } from "@/components/ui";
 import { api } from "@/lib/api";
 
+import { StatusStrip } from "./FlywheelPage";
+
 export function Dashboard() {
   const q = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 60000 });
+  const fw = useQuery({ queryKey: ["flywheel", "summary"], queryFn: api.flywheelSummary, refetchInterval: 120000, retry: 1 });
   const navigate = useNavigate();
   if (q.isLoading) return <Loading label="Preparando o painel…" />;
   if (q.isError) return <ErrorBox error={q.error} retry={() => q.refetch()} />;
   const d = q.data!;
+  const research = d.research_signals ?? 0;
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -28,6 +32,16 @@ export function Dashboard() {
           <RefreshCw size={14} className={q.isFetching ? "animate-spin" : ""} /> Atualizar
         </button>
       </div>
+
+      {/* §3 — estado honesto, sempre visível: modelo · edge de mercado · evidência Superbet */}
+      {fw.data && (
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusStrip items={fw.data.strip} compact />
+          <button className="btn-ghost text-xs" onClick={() => navigate("/flywheel")}>
+            Data Flywheel · {int(fw.data.dataset.raw_snapshots)} snapshots · {int(fw.data.dataset.unique_events)} jogos
+          </button>
+        </div>
+      )}
 
       {/* Resumo da manhã */}
       <Card className="border-l-4 border-l-primary p-5">
@@ -56,11 +70,12 @@ export function Dashboard() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
         <Counter label="Jogos encontrados" value={int(d.events_found)} hint="oferta Superbet 48 h" onClick={() => navigate("/jogos")} />
         <Counter label="Analisados hoje" value={int(d.analyzed_today)} hint="snapshots antes do jogo" onClick={() => navigate("/historico")} />
         <Counter label="Passaram no gate" value={int(d.quality_gate_passed)} accent="text-success" hint={`A ${d.confidence_a} · B ${d.confidence_b} · ${d.actionable_clusters} teses`} onClick={() => navigate("/radar")} />
-        <Counter label="Value / Candidate" value={`${int(d.value)} / ${int(d.value_candidates)}`} accent="text-primary" hint={`${int(d.model_only)} model only (sem preço)`} onClick={() => navigate("/radar")} />
+        <Counter label="Research signals" value={int(research)} accent="text-info" hint="modelo vê edge, mas o mercado não está validado (VALUE desativado) — observar, não apostar" onClick={() => navigate("/radar")} />
+        <Counter label="Value / Candidate" value={`${int(d.value)} / ${int(d.value_candidates)}`} accent="text-primary" hint={`${int(d.model_only)} model only (sem preço) · só surge em mercado com VALUE habilitado`} onClick={() => navigate("/radar")} />
         <Counter label="Em observação" value={int(d.watch)} accent="text-warning" hint="edge sem passar no gate" onClick={() => navigate("/radar")} />
         <Counter label="NO BET" value={int(d.no_bet)} hint="decisão explícita de não entrar" onClick={() => navigate("/radar")} />
         <Counter label="Mercados descartados" value={int(d.discarded_markets)} hint="sem edge, sem dados ou fora da faixa" />
@@ -80,8 +95,12 @@ export function Dashboard() {
         />
         {d.top_opportunities.length === 0 ? (
           <Empty
-            title={d.scheduler.radar_running ? "Analisando os próximos jogos…" : "Nenhuma entrada passou no Quality Gate nas próximas 48h"}
-            detail="O EdgeFut só recomenda quando há dados suficientes, concordância entre modelos, odds frescas e edge plausível. Isso é um resultado válido. Veja o Radar para os jogos em observação e os motivos de NO BET."
+            title={d.scheduler.radar_running ? "Analisando os próximos jogos…" : research > 0 ? `Nenhuma entrada · ${int(research)} research signals em observação` : "Nenhuma entrada passou no Quality Gate nas próximas 48h"}
+            detail={
+              research > 0
+                ? "VALUE está desativado em todos os mercados até haver validação contra a Superbet (edge de mercado UNPROVEN). Os sinais do modelo ficam como RESEARCH SIGNAL no Radar — para observar e medir, não para apostar."
+                : "O EdgeFut só recomenda quando há dados suficientes, concordância entre modelos, odds frescas e edge plausível. Isso é um resultado válido. Veja o Radar para os jogos em observação e os motivos de NO BET."
+            }
           />
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
