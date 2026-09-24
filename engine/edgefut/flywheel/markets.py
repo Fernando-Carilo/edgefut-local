@@ -88,7 +88,7 @@ MAPPED: dict[int, MarketSpec] = {
 
 # Reconhecidos pelo nome → OUT_OF_SCOPE com motivo. Ordem importa (o primeiro que casa ganha).
 OUT_OF_SCOPE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("COMBO_MARKET", re.compile(r";")),  # bet-builder: várias pernas separadas por ';' (marketName varia por seleção)
+    ("COMBO_MARKET", re.compile(r";|super odds", re.I)),  # bet-builder: várias pernas separadas por ';' (marketName varia por seleção); "Super Odds" é combo promocional
     ("PERIOD_MARKET", re.compile(r"(1[ºo°]\s*tempo|2[ºo°]\s*tempo|intervalo|em cada tempo|qualquer um dos tempos|tempo com (o )?maior|nos dois tempos)", re.I)),
     ("TIME_WINDOW", re.compile(r"(primeiros?\s+\d+|pr[oó]ximos?\s+\d+|pr[oó]ximo minuto|de \d+:\d+ a|minutos)", re.I)),
     ("COMBO_MARKET", re.compile(r"(&|\bou\b.*(vence|empate|gols)|resultado final (e|ou)|dupla chance (e|&)|marcam? (e|ou) mais|vencer ou ambas)", re.I)),
@@ -99,7 +99,10 @@ OUT_OF_SCOPE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("TEAM_COMPARISON", re.compile(r"(equipe com mais|com mais (cart|escant|chutes|finaliza)|\(1x2\)|cada equipe|expuls[ãa]o em ambas)", re.I)),
     ("RED_CARDS_OR_WOODWORK", re.compile(r"(vermelh|trave)", re.I)),
     ("FOULS_OFFSIDES", re.compile(r"(faltas?|impedimento)", re.I)),
-    ("OTHER_STAT", re.compile(r"(p[êe]naltis?|arremessos? lateral|tiros? de meta|[úu]ltimo gol|qualifica)", re.I)),
+    ("OTHER_STAT", re.compile(r"(p[êe]naltis?|arremessos? latera(l|is)|tiros? de meta|[úu]ltimo gol|qualifica|de fora da [áa]rea|cada canto)", re.I)),
+    ("REFEREE_VAR", re.compile(r"(\bvar\b|[áa]rbitro)", re.I)),  # decisões de arbitragem: sem estatística liquidável nas fontes
+    ("TEAM_TO_SCORE", re.compile(r"(- marcar gol$|marcar gols consecutivos)", re.I)),  # "Equipe - Marcar Gol": fora das 15 categorias (não é BTTS nem TEAM_TOTAL)
+    ("WIN_VARIANT", re.compile(r"(vencer de virada|ficar [àa] frente|vencer a partida|- vence$|qualquer equipe vence|vence o restante|se classificar|vencer ou qualquer equipe)", re.I)),  # variantes de vitória: dependem de sequência do placar / prolongamento
     ("PLAYER_EXOTIC", re.compile(r"(jogador|duelo|marcar (gol )?(de cabe|com o p[ée]|de fora)|marcar (o )?\d|marcar 2\+|marcar 3\+|assist[êe]ncia|desarme|receber|treinador|goleiro|acumular|cometer)", re.I)),
     ("BTTS_VARIANT", re.compile(r"ambas as equipes marcam", re.I)),  # variantes (2+ gols, em algum tempo…) — o BTTS puro é o 539
     ("DC_VARIANT", re.compile(r"(dupla chance|empate anula)", re.I)),  # variantes por período já apanhadas acima; restos aqui

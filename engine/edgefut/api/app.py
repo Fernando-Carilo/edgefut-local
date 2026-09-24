@@ -34,6 +34,29 @@ ALLOWED_ORIGINS = [
 ]
 
 
+CACHE_BACKFILL_KEY = "flywheel_cache_backfill"
+
+
+def _backfill_cache_once(s) -> None:
+    """Uma única vez: as respostas HTTP reais guardadas em `data/cache` (iterações 1–4) entram como snapshots raw,
+    com `fetched_at` real e `source_version=…/cache-backfill`. Não é histórico fabricado — é o que foi realmente
+    pedido à Superbet antes do Collector V2 existir. Idempotente via Setting."""
+    from datetime import datetime
+
+    from ..db.models import Setting
+    from ..flywheel.collector import backfill_from_cache
+
+    if s.get(Setting, CACHE_BACKFILL_KEY) is not None:
+        return
+    try:
+        out = backfill_from_cache(s, get_paths().cache)
+    except Exception as exc:  # noqa: BLE001 — o boot nunca falha por causa do backfill
+        log.warning("backfill do cache falhou: %s", exc)
+        return
+    s.add(Setting(key=CACHE_BACKFILL_KEY, value={"at": datetime.utcnow().isoformat(), **out}))
+    log.info("backfill do cache HTTP → raw: %s", out)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
@@ -42,7 +65,7 @@ async def lifespan(app: FastAPI):
     install_snapshot_guard()
     install_source_log_sink()
     from ..db.session import session_scope
-    from ..flywheel.collector import record_gap_if_needed
+    from ..flywheel.collector import reclassify_unknown, record_gap_if_needed
     from ..flywheel.governance import register_freeze
     from ..models.registry import sync_registry
     from .routers.system import apply_settings, load_settings
@@ -52,6 +75,8 @@ async def lifespan(app: FastAPI):
         sync_registry(s)
         # iteração 5: freeze registado uma vez (idempotente) e lacuna de coleta do downtime registada no boot
         register_freeze(s)
+        _backfill_cache_once(s)  # antes da lacuna: o downtime conta a partir da última coleta real conhecida
+        reclassify_unknown(s)
         record_gap_if_needed(s, expected_cadence_min=settings.odds_refresh_min, reason="DOWNTIME")
     if settings.autostart_bootstrap:
         bootstrap.run_in_background(minimal=False)

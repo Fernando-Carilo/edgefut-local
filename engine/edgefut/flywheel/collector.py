@@ -423,6 +423,22 @@ def backfill_from_cache(session: Session, cache_dir: Path, *, now: datetime | No
     return out
 
 
+def reclassify_unknown(session: Session, *, now: datetime | None = None) -> int:
+    """Reaplica `classify_market` só às linhas UNKNOWN do registo (quando o código ganha padrões/mapeamentos novos).
+    MAPPED, OUT_OF_SCOPE e decisões manuais (AMBIGUOUS/OUT_OF_SCOPE com motivo humano) nunca são tocados."""
+    now = now or datetime.utcnow()
+    n = 0
+    for row in session.execute(select(MarketMappingRegistry).where(MarketMappingRegistry.status == "UNKNOWN")).scalars():
+        status, category, reason = classify_market(row.superbet_market_id, row.market_name)
+        if status != "UNKNOWN":
+            row.status, row.market_category, row.reason, row.last_seen_at = status, category, reason, now
+            n += 1
+    if n:
+        session.flush()
+        log.info("registo de mercados: %d marketId(s) UNKNOWN reclassificados pelo código atual", n)
+    return n
+
+
 def raw_payload(session: Session, raw_id: int) -> dict | None:
     row = session.get(RawSuperbetSnapshot, raw_id)
     if row is None:
@@ -434,4 +450,4 @@ def raw_payload(session: Session, raw_id: int) -> dict | None:
     return json.loads(zlib.decompress(row.payload).decode("utf-8"))
 
 
-__all__ = ["ingest_event_payload", "IngestResult", "backfill_from_cache", "record_gap_if_needed", "raw_payload", "SNAPSHOT_TARGETS", "TARGET_NAMES", "target_for_minutes", "event_state_from_payload"]
+__all__ = ["ingest_event_payload", "IngestResult", "backfill_from_cache", "reclassify_unknown", "record_gap_if_needed", "raw_payload", "SNAPSHOT_TARGETS", "TARGET_NAMES", "target_for_minutes", "event_state_from_payload"]
