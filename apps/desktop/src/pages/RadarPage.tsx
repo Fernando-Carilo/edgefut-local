@@ -9,13 +9,14 @@ import { RecommendationCard } from "@/components/EventCard";
 import { Counter, Empty, ErrorBox, EvidenceChip, FreshnessChip, GradeBadge, Loading, NoBetChip, PageHeader, SectionTitle, Tooltip } from "@/components/ui";
 import { api } from "@/lib/api";
 
-const ORDER = ["top", "valor", "value_candidate", "high_probability", "model_only", "high_confidence", "gols", "escanteios", "cartoes", "finalizacoes", "observacao", "no_bet"];
+const ORDER = ["top", "valor", "value_candidate", "research_signal", "high_probability", "model_only", "high_confidence", "gols", "escanteios", "cartoes", "finalizacoes", "observacao", "no_bet"];
 
 const CARD_HELP: Record<string, string> = {
   top: "Somente seleções que passaram em TODOS os checks do Quality Gate. Uma PRIMÁRIA por tese: DNB, dupla chance e handicap do mesmo time não aparecem como oportunidades extra. Ordenadas por Opportunity Score V3.",
   high_probability: "MODEL FAVORITE: probabilidade do modelo ≥ limiar. Não implica valor: a odd pode estar justa ou ruim.",
   valor: "VALUE: passou no quality gate E o mercado tem prova out-of-sample suficiente (N mínimo configurável). Não implica alta probabilidade.",
   value_candidate: "VALUE CANDIDATE: passou no quality gate, mas o mercado ainda não tem prova out-of-sample suficiente. Opportunity Score recebe penalidade de incerteza.",
+  research_signal: "RESEARCH SIGNAL: o modelo vê edge e a seleção passou no quality gate, mas VALUE está desativado neste mercado até haver validação contra a Superbet (Pesquisa → estado de edge). Serve para observar e medir CLV — não é recomendação.",
   model_only: "MODEL ONLY: probabilidade calculada, mas sem preço de mercado válido (ou competição nunca validada contra odds). Nunca vira VALUE, nunca entra em ROI.",
   high_confidence: "Confiança A: dados completos, modelos concordando, amostra grande e odds frescas.",
   observacao: "Seleções com edge, mas que falharam em algum check do Quality Gate ou nos limiares. Não são recomendações.",
@@ -67,12 +68,13 @@ function RadarHeader({ d }: { d: RadarResponse }) {
   const topReason = Object.entries(s.no_bet_by_reason).sort((a, b) => b[1] - a[1])[0];
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-5 xl:grid-cols-10">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-6 xl:grid-cols-11">
         <Counter label="Jogos encontrados" value={s.events_found} hint="oferta Superbet 48 h" />
         <Counter label="Com dados suficientes" value={s.with_sufficient_data} hint={`${s.analyzed} analisados`} />
         <Counter label="Passaram no gate" value={s.quality_gate_passed} accent="text-success" hint={evidence.map(([k, v]) => `${v} ${k === "MODEL_ONLY" ? "só modelo" : k === "BACKTEST_ODDS" ? "backtest" : "settled"}`).join(" · ") || "—"} />
         <Counter label="Confiança A / B" value={`${s.confidence_a} / ${s.confidence_b}`} hint="entre as que passaram" />
-        <Counter label="Value / Candidate" value={`${s.value} / ${s.value_candidates}`} accent="text-primary" hint={`edge ≥ ${t.min_edge_pp} pp · EV ≥ ${t.min_ev_pct}% · VALUE exige prova OOS`} />
+        <Counter label="Research signals" value={s.research_signals ?? 0} accent="text-info" hint="passaram no gate, mas VALUE está desativado no mercado — observar, não apostar" />
+        <Counter label="Value / Candidate" value={`${s.value} / ${s.value_candidates}`} accent="text-primary" hint={`edge ≥ ${t.min_edge_pp} pp · EV ≥ ${t.min_ev_pct}% · VALUE exige prova OOS e mercado habilitado`} />
         <Counter label="Teses acionáveis" value={s.actionable_clusters} hint={`${s.selections_actionable} seleções · ${s.exposure_high} jogos com exposição alta`} />
         <Counter label="Model favorite" value={s.high_probability} accent="text-info" hint={`prob. ≥ ${Math.round((t.high_probability_min ?? 0.65) * 100)}% · não é valor`} />
         <Counter label="Model only" value={s.model_only} accent="text-warning" hint="sem preço válido — nunca VALUE" />

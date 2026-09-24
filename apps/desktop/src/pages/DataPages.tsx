@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { fmtDateTime, int, pct, relativeTime } from "@edgefut/shared";
+import { fmtDateTime, int, relativeTime } from "@edgefut/shared";
 import clsx from "clsx";
 import type { BackupRow, QuarantineItem, UnknownMarketRow } from "@edgefut/contracts";
 import { MARKET_CATEGORY_LABELS } from "@edgefut/contracts";
@@ -13,6 +13,9 @@ import { api } from "@/lib/api";
 import { EdgeStateChip, MaturityChip, bytes } from "./FlywheelPage";
 
 type Tab = "settlement" | "unknown" | "quarantine" | "storage" | "identity" | "daily";
+
+/** Valores que o engine já devolve em percentagem (0–100). */
+const pc = (v: number | null | undefined, digits = 0): string => (v === null || v === undefined || Number.isNaN(v) ? "—" : `${v.toFixed(digits)}%`);
 
 /**
  * Sistema → Dados (it. 5): quarentena (§53), unknown markets (§56), storage/backup/export (§49–52),
@@ -105,7 +108,7 @@ function SettlementTab() {
                 <div className="mt-1 flex items-center gap-3 text-ink-2">
                   <span>liquidadas <b className="text-success">{int(v.settled)}</b></span>
                   <span>sem dados <b className="text-warning">{int(v.missing)}</b></span>
-                  <span className="ml-auto font-mono">{p === null ? "—" : pct(p, 0)}</span>
+                  <span className="ml-auto font-mono">{pc(p, 0)}</span>
                 </div>
                 <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-gray-100">
                   <div className="h-full bg-success" style={{ width: `${p ?? 0}%` }} />
@@ -153,7 +156,7 @@ function SettlementTab() {
                       <td className="py-1.5 pr-3 text-right font-mono">{int(r.void)}</td>
                       <td className="py-1.5 pr-3 text-right font-mono text-ink-3">{int(r.unsupported)}</td>
                       <td className={clsx("py-1.5 pr-3 text-right font-mono", r.error > 0 && "text-danger")}>{int(r.error)}</td>
-                      <td className="py-1.5 pr-3 text-right font-mono">{p === null ? "—" : pct(p, 0)}</td>
+                      <td className="py-1.5 pr-3 text-right font-mono">{pc(p, 0)}</td>
                     </tr>
                   );
                 })}
@@ -244,8 +247,8 @@ function UnknownMarketsTab() {
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
         <Counter label="Market ids vistos" value={int(m.market_ids)} hint="ids distintos da Superbet observados no raw" />
-        <Counter label="Mapeados" value={int(st.MAPPED ?? 0)} accent="text-success" hint={m.mapped_pct === null ? "—" : `${pct(m.mapped_pct, 1)} das ocorrências`} />
-        <Counter label="Desconhecidos" value={int(st.UNKNOWN ?? 0)} accent={(st.UNKNOWN ?? 0) > 0 ? "text-warning" : undefined} hint={m.unknown_pct === null ? "—" : `${pct(m.unknown_pct, 1)} das ocorrências`} />
+        <Counter label="Mapeados" value={int(st.MAPPED ?? 0)} accent="text-success" hint={`${pc(m.mapped_pct, 1)} das ocorrências`} />
+        <Counter label="Desconhecidos" value={int(st.UNKNOWN ?? 0)} accent={(st.UNKNOWN ?? 0) > 0 ? "text-warning" : undefined} hint={`${pc(m.unknown_pct, 1)} das ocorrências`} />
         <Counter label="Ambíguos" value={int(st.AMBIGUOUS ?? 0)} hint="não mapear automaticamente" />
         <Counter label="Fora de escopo" value={int(st.OUT_OF_SCOPE ?? 0)} hint="ex.: mercados de jogador (§14)" />
       </div>
@@ -917,8 +920,8 @@ function DailyReportTab() {
         <Counter label="Coletor" value={r.collector.health} accent={r.collector.health === "HEALTHY" ? "text-success" : r.collector.health === "DEGRADED" ? "text-warning" : "text-danger"} hint={r.collector.reasons.join(" · ") || "sem alertas"} />
         <Counter label="Snapshots 24 h" value={int(r.collector.raw_snapshots)} hint={`${int(r.collector.events)} jogos · ${bytes(r.collector.raw_bytes)}`} />
         <Counter label="Linhas normalizadas" value={int(r.collector.normalized_rows)} />
-        <Counter label="Cobertura 48 h" value={r.coverage_48h.coverage_pct === null ? "—" : pct(r.coverage_48h.coverage_pct, 0)} hint={`${int(r.coverage_48h.observed)} / ${int(r.coverage_48h.expected)} alvos`} />
-        <Counter label="Mapeados" value={r.mapping.mapped_pct === null ? "—" : pct(r.mapping.mapped_pct, 1)} hint={`${int(r.mapping.unknown_markets_total)} desconhecidos · ${r.mapping.new_unknown_24h.length} novos`} />
+        <Counter label="Cobertura 48 h" value={pc(r.coverage_48h.coverage_pct, 0)} hint={`${int(r.coverage_48h.observed)} / ${int(r.coverage_48h.expected)} alvos`} />
+        <Counter label="Mapeados" value={pc(r.mapping.mapped_pct, 1)} hint={`${int(r.mapping.unknown_markets_total)} desconhecidos · ${r.mapping.new_unknown_24h.length} novos`} />
         <Counter label="Liquidadas 24 h" value={int(settled.filter(([k]) => ["WON", "LOST", "VOID"].includes(k)).reduce((a, [, v]) => a + v, 0))} hint={settled.map(([k, v]) => `${k} ${v}`).join(" · ") || "—"} />
         <Counter label="Quarentena 24 h" value={int(Object.values(r.quarantine_24h).reduce((a, b) => a + b, 0))} accent={Object.keys(r.quarantine_24h).length ? "text-warning" : undefined} hint={Object.entries(r.quarantine_24h).map(([k, v]) => `${k} ${v}`).join(" · ") || "nada"} />
         <Counter label="Research signals" value={int(r.model.research_signals_24h)} hint={`${int(r.model.shadow_predictions_24h)} previsões shadow · freeze ${r.model.freeze ?? "—"}`} />

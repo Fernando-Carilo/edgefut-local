@@ -5,7 +5,7 @@ import type { CollectorHealth, FlywheelMarketRow, MarketEdgeStateKind, MarketMat
 import { Database, FlaskConical, HardDrive, RefreshCw, ShieldAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import { Card, Counter, Empty, ErrorBox, Loading, PageHeader, SectionTitle, Tooltip } from "@/components/ui";
+import { Card, Counter, Empty, ErrorBox, Loading, PageHeader, SectionTitle } from "@/components/ui";
 import { api } from "@/lib/api";
 
 export const bytes = (b: number | null | undefined) => {
@@ -135,9 +135,10 @@ export function FlywheelPage() {
           ) : (
             <div className="flex h-32 items-end gap-[3px]">
               {d.dataset.daily.map((x) => (
-                <Tooltip key={x.day} text={`${x.day}: ${x.snapshots} snapshots · ${x.events} eventos`}>
+                <div key={x.day} className="flex h-full flex-1 flex-col justify-end" title={`${x.day}: ${x.snapshots} snapshots · ${x.events} eventos`}>
                   <div className="w-full rounded-t bg-primary/80" style={{ height: `${Math.max(3, (x.snapshots / maxDay) * 100)}%` }} />
-                </Tooltip>
+                  <div className="mt-0.5 truncate text-center text-[9px] text-ink-3">{x.day.slice(5)}</div>
+                </div>
               ))}
             </div>
           )}
