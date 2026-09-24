@@ -14,6 +14,7 @@ import logging
 import shutil
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -83,10 +84,12 @@ def create_backup(*, reason: str = "scheduled", now: datetime | None = None) -> 
     stamp = now.strftime("%Y%m%d-%H%M%S")
     dest = backups_dir() / f"{BACKUP_PREFIX}{stamp}{BACKUP_SUFFIX}"
     t0 = time.perf_counter()
-    # backup online consistente: a API copia página a página respeitando o WAL, sem parar o motor
-    with sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30) as s_conn, sqlite3.connect(dest) as d_conn:
+    # backup online consistente: a API copia página a página respeitando o WAL, sem parar o motor.
+    # `closing` é obrigatório: o context manager de sqlite3 só gere a transação e deixaria o ficheiro
+    # aberto (no Windows isso bloqueia unlink/retenção).
+    with closing(sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30)) as s_conn, closing(sqlite3.connect(dest)) as d_conn:
         s_conn.backup(d_conn, pages=1024)
-    with sqlite3.connect(dest) as d_conn:
+    with closing(sqlite3.connect(dest)) as d_conn:
         integrity = d_conn.execute("PRAGMA integrity_check").fetchone()[0]
         counts = _counts(d_conn)
         schema_version = d_conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
@@ -180,7 +183,7 @@ def restore_backup(file_name: str, *, now: datetime | None = None) -> dict:
     if not src.exists() or not src.name.startswith(BACKUP_PREFIX):
         return {"ok": False, "error": "backup não encontrado"}
     try:
-        with sqlite3.connect(f"file:{src}?mode=ro", uri=True) as c:
+        with closing(sqlite3.connect(f"file:{src}?mode=ro", uri=True)) as c:
             integrity = c.execute("PRAGMA integrity_check").fetchone()[0]
     except sqlite3.Error as exc:
         integrity = f"unreadable ({exc})"
@@ -189,7 +192,7 @@ def restore_backup(file_name: str, *, now: datetime | None = None) -> dict:
     db = get_paths().sqlite
     safety = backups_dir() / f"pre-restore-{now.strftime('%Y%m%d-%H%M%S')}{BACKUP_SUFFIX}"
     if db.exists():
-        with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=30) as s_conn, sqlite3.connect(safety) as d_conn:
+        with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=30)) as s_conn, closing(sqlite3.connect(safety)) as d_conn:
             s_conn.backup(d_conn)
     for suffix in ("-wal", "-shm"):
         side = Path(str(db) + suffix)

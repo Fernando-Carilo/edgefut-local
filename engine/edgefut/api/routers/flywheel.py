@@ -30,7 +30,16 @@ from ...db.models import (
     SuperbetSettlement,
 )
 from ...db.session import get_session
-from ...flywheel import DATASET_VERSION, NORMALIZER_VERSION, SETTLEMENT_VERSION, SOURCE_VERSION, governance, reports, research, storage
+from ...flywheel import (
+    DATASET_VERSION,
+    NORMALIZER_VERSION,
+    SETTLEMENT_VERSION,
+    SOURCE_VERSION,
+    governance,
+    reports,
+    research,
+    storage,
+)
 from ...flywheel.collector import SNAPSHOT_TARGETS, raw_payload
 from ...flywheel.coverage import coverage_report
 from ...flywheel.markets import CATEGORY_LABELS, CATEGORY_ORDER, MAPPED, OUT_OF_SCOPE_PATTERNS

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -254,10 +255,10 @@ def test_backup_manifest_retention_and_restore_with_safety_copy():
     get_engine().dispose()
     out = storage.restore_backup(res["file"], now=t0 + timedelta(minutes=1))
     assert out["ok"] and out["restored_from"] == res["file"] and out["safety_copy"].startswith("pre-restore-")
-    with sqlite3.connect(db) as c:
+    with closing(sqlite3.connect(db)) as c:
         assert c.execute("SELECT COUNT(*) FROM event WHERE id = ?", (EV + 77,)).fetchone()[0] == 0  # base voltou ao estado do backup
         assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    with sqlite3.connect(bdir / out["safety_copy"]) as c:
+    with closing(sqlite3.connect(bdir / out["safety_copy"])) as c:
         assert c.execute("SELECT COUNT(*) FROM event WHERE id = ?", (EV + 77,)).fetchone()[0] == 1  # nada se perdeu: está na cópia de segurança
     get_engine().dispose()
     run_migrations(get_engine())
