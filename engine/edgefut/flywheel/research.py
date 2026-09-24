@@ -428,7 +428,7 @@ def seed_experiments(session: Session, *, now: datetime | None = None) -> int:
     from ..db.models import ExperimentRegistry
 
     now = now or datetime.utcnow()
-    existing = {r.hypothesis_id for r in session.execute(select(ExperimentRegistry.hypothesis_id)).scalars()}
+    existing = set(session.execute(select(ExperimentRegistry.hypothesis_id)).scalars().all())
     created = 0
     for h in SEED_HYPOTHESES:
         if h["hypothesis_id"] in existing:

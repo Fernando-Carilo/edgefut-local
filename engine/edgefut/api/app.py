@@ -41,13 +41,18 @@ async def lifespan(app: FastAPI):
     run_migrations(get_engine())
     install_snapshot_guard()
     install_source_log_sink()
-    from .routers.system import apply_settings, load_settings
     from ..db.session import session_scope
+    from ..flywheel.collector import record_gap_if_needed
+    from ..flywheel.governance import register_freeze
     from ..models.registry import sync_registry
+    from .routers.system import apply_settings, load_settings
 
     with session_scope() as s:
         apply_settings(load_settings(s))
         sync_registry(s)
+        # iteração 5: freeze registado uma vez (idempotente) e lacuna de coleta do downtime registada no boot
+        register_freeze(s)
+        record_gap_if_needed(s, expected_cadence_min=settings.odds_refresh_min, reason="DOWNTIME")
     if settings.autostart_bootstrap:
         bootstrap.run_in_background(minimal=False)
     log.info("EdgeFut engine %s em http://%s:%s", versions.APP_VERSION, settings.host, settings.port)

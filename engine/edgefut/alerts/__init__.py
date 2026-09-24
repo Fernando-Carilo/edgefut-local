@@ -26,6 +26,13 @@ KINDS = {
     "MODEL_CONFIDENCE_CHANGE": "Mudança na confiança do modelo",
     "OPPORTUNITY_APPEARED": "Oportunidade encontrada",
     "OPPORTUNITY_LOST": "Oportunidade perdida",
+    # iteração 5 (§45) — nunca "BET NOW": sinais para observar, saúde do coletor e settlement
+    "RESEARCH_SIGNAL": "Novo research signal",
+    "PRICE_TARGET_REACHED": "Preço atingiu alvo de observação",
+    "LINE_MOVED": "Movimento relevante detectado",
+    "SETTLEMENT_COMPLETED": "Settlement concluído",
+    "COLLECTOR_DEGRADED": "Coletor degradado",
+    "SCHEMA_CHANGED": "Superbet schema changed",
 }
 
 
@@ -41,6 +48,7 @@ def _fingerprint(a: MatchAnalysis) -> dict:
         # iteração 3 — watchlist de preço: primárias acionáveis e seleções "quase" (WATCHING PRICE)
         "value": {_rk(r): r.odd for r in a.recommendations if r.is_primary and r.state in ("VALUE", "VALUE_CANDIDATE", "RESEARCH_SIGNAL")},
         "watching": {_rk(r): (r.price or {}).get("min_acceptable_odd") for r in a.recommendations if "WATCHING_PRICE" in r.reasons},
+        "research": {_rk(r): r.odd for r in a.recommendations if r.is_primary and r.state == "RESEARCH_SIGNAL"},
     }
 
 
@@ -81,11 +89,15 @@ def scan_alerts(session: Session, analyses: list[MatchAnalysis] | None = None) -
             created += _emit(session, "OPPORTUNITY_APPEARED", a.event.id, f"{cur['label']}: {cur['best']}", {"grade": cur["grade"]})
         if old.get("best") and not cur["best"]:
             created += _emit(session, "OPPORTUNITY_LOST", a.event.id, f"{cur['label']}: {old['best']} ({cur['no_bet'] or 'sem edge'})", {"reason": cur["no_bet"]}, severity="warning")
+        # iteração 5: novo RESEARCH_SIGNAL numa primária (observar, não apostar)
+        for key, odd in (cur.get("research") or {}).items():
+            if key not in (old.get("research") or {}):
+                created += _emit(session, "RESEARCH_SIGNAL", a.event.id, f"{cur['label']}: {key} @ {odd:.2f} — research signal (VALUE desativado; observar preço e movimento)", {"odd": odd, "state": "RESEARCH_SIGNAL"})
         # watchlist de preço: seleção observada atingiu a odd mínima aceitável / oportunidade perdeu o preço
         old_watch, old_value = old.get("watching") or {}, old.get("value") or {}
         for key, odd in (cur.get("value") or {}).items():
             if key in old_watch and key not in old_value:
-                created += _emit(session, "OPPORTUNITY_APPEARED", a.event.id, f"{cur['label']}: {key} atingiu o preço-alvo (odd {odd:.2f} ≥ mín. {old_watch[key]:.2f})" if old_watch.get(key) else f"{cur['label']}: {key} atingiu o preço-alvo (odd {odd:.2f})", {"trigger": "price_target", "odd": odd, "min_acceptable_odd": old_watch.get(key)})
+                created += _emit(session, "PRICE_TARGET_REACHED", a.event.id, f"{cur['label']}: {key} atingiu o preço-alvo (odd {odd:.2f} ≥ mín. {old_watch[key]:.2f})" if old_watch.get(key) else f"{cur['label']}: {key} atingiu o preço-alvo (odd {odd:.2f})", {"trigger": "price_target", "odd": odd, "min_acceptable_odd": old_watch.get(key)})
         for key, odd in old_value.items():
             if key in (cur.get("watching") or {}) and key not in (cur.get("value") or {}):
                 created += _emit(session, "OPPORTUNITY_LOST", a.event.id, f"{cur['label']}: {key} perdeu o preço (odd abaixo do mínimo aceitável)", {"trigger": "price_target", "previous_odd": odd, "min_acceptable_odd": (cur.get("watching") or {}).get(key)}, severity="warning")

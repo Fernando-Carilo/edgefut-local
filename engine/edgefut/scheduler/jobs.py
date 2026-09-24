@@ -46,6 +46,12 @@ _state: dict = {
     "last_reconciliation": None,
     "last_shadow_report": None,
     "last_drift_check": None,
+    "last_flywheel_settle": None,
+    "last_flywheel_health": None,
+    "last_flywheel_research": None,
+    "last_flywheel_daily": None,
+    "last_flywheel_weekly": None,
+    "last_backup": None,
     "radar_running": False,
     "errors": [],
 }
@@ -68,6 +74,12 @@ JOB_LABELS = {
     "reconcile": "Reconciliação de settlement",
     "shadow_report": "Relatório diário do modelo (shadow)",
     "drift": "Drift monitor",
+    "flywheel_settle": "Settlement por mercado (Superbet)",
+    "flywheel_health": "Saúde do coletor Superbet",
+    "flywheel_research": "Pesquisa por mercado (margem, CLV, discovery, FDR)",
+    "flywheel_daily": "Relatório diário (Data Flywheel)",
+    "flywheel_weekly": "Relatório semanal de evidência",
+    "backup": "Backup local (7/4/3)",
 }
 
 
@@ -154,18 +166,24 @@ def run_job(name: str, fn: Callable[[], dict], *, state_key: str | None = None) 
 
 
 def _sync_events() -> dict:
+    # 56 h: o alvo T-48h do Collector V2 tem janela até 54 h antes do kickoff (§5)
     with session_scope() as s:
-        return SuperbetSync().sync_events(s)
+        return SuperbetSync().sync_events(s, hours_ahead=56)
 
 
 def job_sync_events() -> dict:
     return run_job("sync_events", _sync_events, state_key="last_events_sync")
 
 
-def _sync_odds(hours: int = 48, limit: int = 60) -> dict:
+def _sync_odds(hours: int = 56, limit: int = 120) -> dict:
     n = 0
+    flywheel_new = flywheel_conf = 0
     with session_scope() as s:
         now = datetime.utcnow()
+        # §48: se o processo esteve parado, a lacuna fica registada antes de voltar a coletar
+        from ..flywheel.collector import record_gap_if_needed
+
+        record_gap_if_needed(s, now=now, expected_cadence_min=settings.odds_refresh_min)
         ids = s.execute(
             select(Event.id)
             .where(Event.kickoff_utc > now - timedelta(hours=2), Event.kickoff_utc < now + timedelta(hours=hours), Event.duplicate_of.is_(None))
@@ -181,10 +199,14 @@ def _sync_odds(hours: int = 48, limit: int = 60) -> dict:
         if r.get("blocked"):
             break
         n += 1
-    return {"ok": True, "events": n}
+        fw = r.get("flywheel") or {}
+        if fw.get("raw_id"):
+            flywheel_conf += 1 if fw.get("confirmation") else 0
+            flywheel_new += 0 if fw.get("confirmation") else 1
+    return {"ok": True, "events": n, "raw_new": flywheel_new, "raw_confirmations": flywheel_conf}
 
 
-def job_sync_odds(hours: int = 48, limit: int = 60) -> dict:
+def job_sync_odds(hours: int = 56, limit: int = 120) -> dict:
     res = run_job("sync_odds", lambda: _sync_odds(hours, limit), state_key="last_odds_sync")
     if res.get("ok") and not res.get("skipped"):
         run_in_background(job_alerts)
@@ -385,6 +407,90 @@ def job_drift() -> dict:
     return run_job("drift", _drift, state_key="last_drift_check")
 
 
+# ---------------------------------------------------------------------------
+# iteração 5 — Data Flywheel
+# ---------------------------------------------------------------------------
+
+
+def _flywheel_settle() -> dict:
+    from ..alerts import KINDS
+    from ..db.models import Alert
+    from ..flywheel.settlement import settle_events
+
+    with session_scope() as s:
+        res = settle_events(s)
+        if res.get("settled"):
+            s.add(Alert(kind="SETTLEMENT_COMPLETED", event_id=None, title=f"{KINDS['SETTLEMENT_COMPLETED']}: {res['settled']} seleção(ões) em {res['events']} evento(s)", detail={k: v for k, v in res.items() if k != "ok"}, severity="info"))
+    return res
+
+
+def job_flywheel_settle() -> dict:
+    return run_job("flywheel_settle", _flywheel_settle, state_key="last_flywheel_settle")
+
+
+def _flywheel_health() -> dict:
+    from ..flywheel.collector import record_gap_if_needed
+    from ..flywheel.reliability import collector_health, emit_health_alerts
+
+    with session_scope() as s:
+        record_gap_if_needed(s, expected_cadence_min=settings.odds_refresh_min)
+        h = collector_health(s)
+        alerts = emit_health_alerts(s, h)
+    return {"ok": True, "health": h["health"], "reasons": "; ".join(h["reasons"])[:300], "alerts": alerts, "records": 1}
+
+
+def job_flywheel_health() -> dict:
+    return run_job("flywheel_health", _flywheel_health, state_key="last_flywheel_health")
+
+
+def _flywheel_research() -> dict:
+    from ..flywheel.reports import run_research
+
+    with session_scope() as s:
+        res = run_research(s, persist=True)
+    invalidate_cache()  # estados de edge/VALUE podem ter mudado → recomendações recalculam
+    return {"ok": True, "records": int(res["frames"].get("timelines", 0)), "duration_ms": res["duration_ms"], "candidates": sum(1 for e in res["edge_states"] if e.get("enablement_candidate"))}
+
+
+def job_flywheel_research() -> dict:
+    return run_job("flywheel_research", _flywheel_research, state_key="last_flywheel_research")
+
+
+def _flywheel_daily() -> dict:
+    from ..flywheel.reports import daily_report
+
+    with session_scope() as s:
+        rep = daily_report(s, persist=True)
+    return {"ok": True, "records": rep["collector"]["raw_snapshots"], "health": rep["collector"]["health"]}
+
+
+def job_flywheel_daily() -> dict:
+    return run_job("flywheel_daily", _flywheel_daily, state_key="last_flywheel_daily")
+
+
+def _flywheel_weekly() -> dict:
+    from ..flywheel.reports import weekly_report
+
+    with session_scope() as s:
+        rep = weekly_report(s, persist=True)
+    return {"ok": True, "records": rep["collection"]["raw_snapshots_7d"], "headline": rep["headline"][:300]}
+
+
+def job_flywheel_weekly() -> dict:
+    return run_job("flywheel_weekly", _flywheel_weekly, state_key="last_flywheel_weekly")
+
+
+def _backup() -> dict:
+    from ..flywheel.storage import create_backup
+
+    res = create_backup(reason="scheduled")
+    return {**res, "records": 1 if res.get("ok") else 0}
+
+
+def job_backup() -> dict:
+    return run_job("backup", _backup, state_key="last_backup")
+
+
 def mark_orphan_runs() -> int:
     """Execuções deixadas em `running` por um processo anterior (crash, kill, VM suspensa)
     são marcadas `interrupted` no boot — nunca ficam eternamente 'rodando'."""
@@ -435,6 +541,13 @@ def start() -> BackgroundScheduler | None:
     sched.add_job(job_reconcile, "interval", hours=6, id="reconcile", next_run_time=datetime.utcnow() + timedelta(seconds=90), **common)
     sched.add_job(job_shadow_report, "interval", hours=24, id="shadow_report", next_run_time=datetime.utcnow() + timedelta(minutes=5), **common)
     sched.add_job(job_drift, "interval", hours=24, id="drift", next_run_time=datetime.utcnow() + timedelta(minutes=6), **common)
+    # iteração 5 — Data Flywheel: settlement por mercado, saúde do coletor, pesquisa, relatórios e backup
+    sched.add_job(job_flywheel_settle, "interval", minutes=30, id="flywheel_settle", next_run_time=datetime.utcnow() + timedelta(minutes=3), **common)
+    sched.add_job(job_flywheel_health, "interval", minutes=10, id="flywheel_health", next_run_time=datetime.utcnow() + timedelta(minutes=2), **common)
+    sched.add_job(job_flywheel_research, "interval", hours=6, id="flywheel_research", next_run_time=datetime.utcnow() + timedelta(minutes=8), **common)
+    sched.add_job(job_flywheel_daily, "interval", hours=24, id="flywheel_daily", next_run_time=datetime.utcnow() + timedelta(minutes=12), **common)
+    sched.add_job(job_flywheel_weekly, "interval", days=7, id="flywheel_weekly", next_run_time=datetime.utcnow() + timedelta(minutes=15), **common)
+    sched.add_job(job_backup, "interval", hours=24, id="backup", next_run_time=datetime.utcnow() + timedelta(minutes=20), **common)
     sched.start()
     _scheduler = sched
     return sched

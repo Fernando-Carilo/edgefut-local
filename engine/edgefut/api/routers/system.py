@@ -105,6 +105,8 @@ def jobs_run(job: str):
         "calibration": jobs.job_update_calibration, "cache_cleanup": jobs.job_cache_cleanup, "alerts": jobs.job_alerts,
         "live_poll": jobs.job_live_poll, "ensemble_weights": jobs.job_ensemble_weights,
         "reconcile": jobs.job_reconcile, "shadow_report": jobs.job_shadow_report, "drift": jobs.job_drift,
+        "flywheel_settle": jobs.job_flywheel_settle, "flywheel_health": jobs.job_flywheel_health, "flywheel_research": jobs.job_flywheel_research,
+        "flywheel_daily": jobs.job_flywheel_daily, "flywheel_weekly": jobs.job_flywheel_weekly, "backup": jobs.job_backup,
     }.get(job)
     if fn is None:
         return JSONResponse(status_code=404, content={"detail": f"job desconhecido: {job}"})
