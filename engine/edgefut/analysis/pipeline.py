@@ -6,10 +6,9 @@ ODD JUSTA → COMPARAÇÃO → EDGE → RISCO → RECOMENDAÇÃO/NO BET → EXPL
 
 from __future__ import annotations
 
-from collections import Counter
-
 import logging
 import threading
+from collections import Counter
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -20,15 +19,14 @@ from ..collectors import SuperbetSync, latest_odds_rows, odds_history_map
 from ..collectors.sync import IdentityAssigner
 from ..core import versions
 from ..core.config import settings
-from ..db.models import ShadowPrediction, Competition, Event, Favorite, PredictionSnapshot, Setting
+from ..db.models import Competition, Event, Favorite, PredictionSnapshot, Setting, ShadowPrediction
+from ..domain import freshness as fresh
 from ..domain.analysis import (
-    CountDistribution,
     EventSummary,
     MatchAnalysis,
     TeamProfile,
     VenueInfo,
 )
-from ..domain import freshness as fresh
 from ..domain.provenance import Provenance, SourceAttempt
 from ..explanations import explain, explain_recommendation
 from ..features.data_quality import compute_data_quality
@@ -44,15 +42,15 @@ from ..features.strength import (
 )
 from ..features.temporal import TemporalFeatureStore
 from ..features.venue import resolve_venue
-from ..models.counts import cards_engine, corners_engine, shots_engine
-from ..models.dixon_coles import dc_cache, dixon_coles_output, fit_dixon_coles
 from ..models.bivariate_poisson import bivariate_output, bp_cache, fit_bivariate_poisson
 from ..models.calibration import Calibrator, load_calibrators
+from ..models.counts import cards_engine, corners_engine, shots_engine
+from ..models.dixon_coles import dc_cache, dixon_coles_output, fit_dixon_coles
+from ..models.elo import elo_cache, elo_output, fit_elo
 from ..models.ensemble import CHAMPION_MEMBERS, compare, load_weights
 from ..models.international_strength import fit_international, international_output
-from ..models.strength_v2 import fit_strength_v2, strength_v2_output, sv2_cache
-from ..models.elo import elo_cache, elo_output, fit_elo
 from ..models.poisson import poisson_model
+from ..models.strength_v2 import fit_strength_v2, strength_v2_output, sv2_cache
 from ..normalization import CompetitionProfile, classify_competition, is_womens
 from ..odds import build_markets
 from ..providers import SourceResolver
@@ -63,6 +61,7 @@ from ..recommendations.correlation import views_from
 from ..simulation.monte_carlo import simulate
 from ..validation.governance import current_champion
 from .changes import why_model_changed
+from .market_view import market_view, validation_status
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +180,34 @@ def oos_by_market(session: Session) -> dict[str, dict]:
         return out
 
     return _ctx("oos_by_market", load)  # type: ignore[return-value]
+
+
+def replay_reliability(session: Session) -> dict[str, float]:
+    """ECE do campeão no último replay de clubes ({"1X2": ece, "OU25": ece}) — entra no intervalo de incerteza."""
+
+    def load():
+        out: dict[str, float] = {}
+        try:
+            from sqlalchemy import select as _select
+
+            from ..db.models import ValidationRun
+
+            for run in session.execute(_select(ValidationRun).where(ValidationRun.kind == "replay").order_by(ValidationRun.created_at.desc()).limit(10)).scalars():
+                det = run.detail or {}
+                if (run.summary or {}).get("international") or not det.get("overall"):
+                    continue
+                champ = det.get("champion") or "ensemble"
+                ov = det["overall"].get(champ) or det["overall"].get("ensemble") or {}
+                if ov.get("ece") is not None:
+                    out["1X2"] = float(ov["ece"])
+                if (ov.get("ou25") or {}).get("ece") is not None:
+                    out["OU25"] = float(ov["ou25"]["ece"])
+                break
+        except Exception as exc:  # noqa: BLE001
+            log.warning("replay_reliability indisponível: %s", exc)
+        return out
+
+    return _ctx("replay_reliability", load)  # type: ignore[return-value]
 
 
 def thresholds_hash() -> str:
@@ -521,6 +548,9 @@ def analyze_event(
         model_source = "Dixon-Coles + Monte Carlo"
     else:
         model_source = "Poisson por força + Monte Carlo"
+    # ---- iteração 4: MARKET vs EDGEFUT (artefato market-aware congelado) ---------
+    view = _market_view(session, markets, sim, codes, venue, la, home, away, disagreement, row, elo_diff)
+    mv_status = validation_status(session)
     recs, verdict, event_why_not = evaluate(
         markets=markets, sim=sim, corners=corners, cards=cards, confidence=conf, data_quality=dq,
         supported=profile.supported, teams_resolved=resolved.ok, min_sample=min(home.sample_size, away.sample_size),
@@ -530,6 +560,8 @@ def analyze_event(
         odds_age_seconds=odds_f.age_seconds if odds_f is not None else None,
         provider_status=provider_status(session), n_models=n_models, model_source=model_source,
         historical=historical_by_market(session), evidence=evidence, oos=oos_by_market(session),
+        model_rows=[r.model_dump(mode="json") for r in comparison.rows], replay_ece=replay_reliability(session),
+        market_view=view, market_efficiency=mv_status.get("markets") or {},
     )
     cluster_views, exposure = views_from(recs)
     if not profile.supported and profile.reason:
@@ -598,6 +630,7 @@ def analyze_event(
         exposure=exposure.to_dict(),
         states=dict(Counter(r.state or "NO_BET" for r in recs if r.market_key != "PLAYER_TO_SCORE")),
         champion=champion,
+        market_view=view,
     )
     analysis.explanation = explain(analysis)
     for r in analysis.recommendations:
@@ -622,6 +655,47 @@ def analyze_event(
     with _cache_lock:
         _cache[event_id] = (datetime.utcnow(), analysis)
     return analysis
+
+
+def _market_view(session: Session, markets, sim, codes, venue, la, home: TeamProfile, away: TeamProfile, disagreement, row: Event, elo_diff) -> dict | None:
+    """Bloco MARKET vs EDGEFUT: p_mercado (justa, agora) e p_edgefut (consenso cru, como no frame do
+    replay) para 1X2 e Over/Under 2,5 + features de contexto em T. Nunca derruba a análise."""
+    if sim is None:
+        return None
+    try:
+        pm3 = pe3 = None
+        pmo = peo = None
+        for m in markets:
+            if m.market_key == "1X2" and len(m.selections) == 3:
+                by = {s.key: (s.fair if s.fair is not None else s.implied) for s in m.selections}
+                if all(k in by for k in ("HOME", "DRAW", "AWAY")):
+                    tot = sum(by.values()) or 1.0
+                    pm3 = (by["HOME"] / tot, by["DRAW"] / tot, by["AWAY"] / tot)
+            if m.market_key == "TOTAL_GOALS" and m.line is not None and abs(m.line - 2.5) < 1e-9:
+                by = {s.key: (s.fair if s.fair is not None else s.implied) for s in m.selections}
+                if "OVER" in by and "UNDER" in by:
+                    pmo = by["OVER"] / ((by["OVER"] + by["UNDER"]) or 1.0)
+        if sim.p_home is not None:
+            pe3 = (float(sim.p_home), float(sim.p_draw), float(sim.p_away))
+        if sim.over.get("2.5") is not None:
+            peo = float(sim.over["2.5"])
+        if pm3 is None and pmo is None:
+            return None
+        w5h, w5a = home.windows.get("all_5"), away.windows.get("all_5")
+        features = {
+            "dataset": codes[0] if codes else None, "neutral": bool(venue.neutral), "elo_diff": elo_diff,
+            "att_diff": (home.attack - away.attack) if home.attack is not None and away.attack is not None else None,
+            "def_diff": (home.defense - away.defense) if home.defense is not None and away.defense is not None else None,
+            "home_advantage": (la.home_goals / la.away_goals) if la and getattr(la, "away_goals", 0) else None,
+            "form5_home": w5h.points_per_game if w5h else None, "form5_away": w5a.points_per_game if w5a else None,
+            "gd5_home": ((w5h.goals_for or 0) - (w5h.goals_against or 0)) * w5h.n if w5h and w5h.goals_for is not None else None,
+            "gd5_away": ((w5a.goals_for or 0) - (w5a.goals_against or 0)) * w5a.n if w5a and w5a.goals_for is not None else None,
+            "min_team_sample": min(home.sample_size, away.sample_size), "agreement_pp": disagreement, "kickoff": row.kickoff_utc,
+        }
+        return market_view(session, p_market_1x2=pm3, p_edgefut_1x2=pe3, p_market_over25=pmo, p_edgefut_over25=peo, features=features)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("market_view falhou para evento %s: %s", row.id, exc)
+        return None
 
 
 def _freshness(odds_collected_at, home: TeamProfile, away: TeamProfile, comp_df: pd.DataFrame, venue: VenueInfo, has_odds: bool) -> list[fresh.Freshness]:

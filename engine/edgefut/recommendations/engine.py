@@ -22,6 +22,12 @@ from .edge import CATEGORY_BY_MARKET, WATCH_ONLY_MARKETS, edge_and_ev, model_pro
 from .gate import GateContext, quality_gate
 from .opportunity import OpportunityInputs, compute_opportunity
 from .pricing import WATCH_PRICE_TEXT, is_watching_price, price_target
+from .required_edge import (
+    RequiredEdgeInputs,
+    UncertaintyInputs,
+    required_edge,
+    uncertainty_interval,
+)
 from .why import WhyContext, event_why_not, why_bet, why_not
 
 EXTREME_MOVEMENT_PCT = 15.0
@@ -37,6 +43,26 @@ STATE_TEXT = {
     "OBSERVATION": "Edge existe, mas ficou em observação.",
     "NO_BET": "Sem entrada.",
 }
+EDGE_NOT_ROBUST_TEXT = "Edge bruto abaixo do required edge (margem + incerteza + calibração + amostra): em observação."
+RESIDUAL_LOW_TEXT = "O challenger market-aware validado não vê edge além do mercado nesta seleção: em observação."
+
+
+def member_probabilities(rows: list[dict] | None, market_key: str, selection_key: str, line: float | None) -> list[float]:
+    """Probabilidades da mesma seleção nos membros do consenso (para o intervalo de incerteza)."""
+    out: list[float] = []
+    for r in rows or []:
+        if not r.get("available") or (r.get("weight") or 0) <= 0:
+            continue
+        p = None
+        if market_key == "1X2":
+            p = {"HOME": r.get("p_home"), "DRAW": r.get("p_draw"), "AWAY": r.get("p_away")}.get(selection_key)
+        elif market_key == "TOTAL_GOALS" and line is not None and abs(line - 2.5) < 1e-9 and r.get("over25") is not None:
+            p = r["over25"] if selection_key == "OVER" else 1 - r["over25"]
+        elif market_key == "BTTS" and r.get("btts") is not None:
+            p = r["btts"] if selection_key == "YES" else 1 - r["btts"]
+        if p is not None:
+            out.append(float(p))
+    return out
 
 
 def state_label(state: str | None, model_prob: float) -> str | None:
@@ -105,6 +131,12 @@ def opportunity_label(model_prob: float, edge_pp: float, ev_pct: float) -> str |
     return None
 
 
+def _market_aware_row(view: dict | None, market_key: str, selection_key: str, line: float | None) -> dict | None:
+    from ..analysis.market_view import selection_lookup
+
+    return selection_lookup(view, market_key, selection_key, line)
+
+
 def _event_no_bet(
     *,
     supported: bool,
@@ -158,6 +190,10 @@ def evaluate(
     historical: dict[str, dict] | None = None,  # market_key → {"roi": %, "n": int}
     evidence: str = "MODEL_ONLY",
     oos: dict[str, dict] | None = None,  # market_key → prova out-of-sample (replay/settled)
+    model_rows: list[dict] | None = None,  # ModelComparison.rows serializado (membros do consenso)
+    replay_ece: dict[str, float] | None = None,  # {"1X2": ece, "OU25": ece} do campeão no último replay
+    market_view: dict | None = None,  # analysis.market_view.market_view(): bloco híbrido do evento
+    market_efficiency: dict[str, str] | None = None,  # {"1X2": status, "OU25": status} da validação market-aware
 ) -> tuple[list[Recommendation], NoBetVerdict, list[str]]:
     """Retorna (recomendações, veredito do evento, WHY NOT do evento).
 
@@ -268,8 +304,24 @@ def evaluate(
                 if not gate.passed:
                     status, reasons = "WATCH", ["QUALITY_GATE", *reasons]
 
-            # ---- estado (§22) --------------------------------------------------------------
+            # ---- iteração 4: edge bruto vs required edge (§21–§24) e market-aware (§36–§37) ------
             price_ok = sel.price is not None and sel.price > 1.0
+            unc = uncertainty_interval(UncertaintyInputs(
+                model_prob=mp, member_probs=member_probabilities(model_rows, market.market_key, sel.key, market.line),
+                replay_ece=(replay_ece or {}).get("OU25" if market.market_key == "TOTAL_GOALS" else "1X2"), min_sample=min_sample,
+            ))
+            ma_key = "OU25" if market.market_key == "TOTAL_GOALS" and market.line is not None and abs(market.line - 2.5) < 1e-9 else ("1X2" if market.market_key == "1X2" else None)
+            req_edge = required_edge(RequiredEdgeInputs(
+                edge_raw_pp=edge_pp, market_overround=market.overround, uncertainty_half_pp=unc["half_width_pp"], calibration_reliable=cal is not None,
+                market_oos_n=int(((oos or {}).get(market.market_key) or {}).get("n") or 0), market_efficiency_status=(market_efficiency or {}).get(ma_key) if ma_key else None,
+            )) if price_ok else None
+            ma_row = _market_aware_row(market_view, market.market_key, sel.key, market.line)
+            if status == "RECOMMENDED" and req_edge is not None and not req_edge["robust"]:
+                status, reasons = "WATCH", ["EDGE_NOT_ROBUST", *reasons]
+            elif status == "RECOMMENDED" and ma_row is not None and ma_row.get("validated") and ma_row["residual_edge_pp"] < settings.min_edge_pp:
+                status, reasons = "WATCH", ["RESIDUAL_EDGE_LOW", *reasons]
+
+            # ---- estado (§22) --------------------------------------------------------------
             price = price_target(mp, sel.price if price_ok else None, (1.0 + market.overround) if market.overround is not None else None, market_prob if price_ok else None)
             oos_row: dict | None = None
             if not price_ok:
@@ -300,7 +352,14 @@ def evaluate(
                     state, status, reasons = "OBSERVATION", "WATCH", ["WATCHING_PRICE", *[r for r in reasons if r != "NO_EDGE"]]
             else:
                 state = "NO_BET"
-            state_text = WATCH_PRICE_TEXT if "WATCHING_PRICE" in reasons else STATE_TEXT[state]
+            if "WATCHING_PRICE" in reasons:
+                state_text = WATCH_PRICE_TEXT
+            elif state == "OBSERVATION" and "EDGE_NOT_ROBUST" in reasons:
+                state_text = EDGE_NOT_ROBUST_TEXT
+            elif state == "OBSERVATION" and "RESIDUAL_EDGE_LOW" in reasons:
+                state_text = RESIDUAL_LOW_TEXT
+            else:
+                state_text = STATE_TEXT[state]
 
             rec = Recommendation(
                 market_key=market.market_key, market_label=market.label, selection_key=sel.key,
@@ -313,6 +372,7 @@ def evaluate(
                 label=state_label(state, mp), opportunity=opp, quality_gate=gate,  # type: ignore[arg-type]
                 evidence=evidence,  # type: ignore[arg-type]
                 state=state, state_text=state_text, price=price, oos=oos_row,  # type: ignore[arg-type]
+                uncertainty=unc, required_edge=req_edge, market_aware=ma_row,
             )
             if state == "MODEL_ONLY":
                 rec.opportunity_adjustments = {"model_only": -rec.opportunity_score}

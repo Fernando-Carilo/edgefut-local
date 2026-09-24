@@ -117,6 +117,37 @@ class _Pred:
     close_ou: tuple[float, float] | None
     mid: int = -1             # índice da partida no frame (chave de pareamento)
     group: str | None = None  # temporada / tipo de torneio
+    min_sample: int | None = None      # menor amostra de time em T (HistoricalQualityGate)
+    agreement_pp: float | None = None  # divergência máxima entre modelos de gols em T
+
+
+# §13 — HistoricalQualityGate: o que do quality gate de produção é reconstruível em T no replay.
+HISTORICAL_QUALITY_GATE = {
+    "edge_ev_odd_band": "RECONSTRUCTED",
+    "min_team_sample": "RECONSTRUCTED",
+    "model_disagreement": "RECONSTRUCTED",
+    "data_quality": "PARTIAL (só cobertura de resultados/odds; frescor e provider não existem em T)",
+    "confidence": "PARTIAL (sem frescor/provider/calibração ao vivo)",
+    "odds_freshness": "UNAVAILABLE_IN_REPLAY",
+    "provider_health": "UNAVAILABLE_IN_REPLAY",
+    "lineups": "UNAVAILABLE_IN_REPLAY",
+    "clusters_correlation": "UNAVAILABLE_IN_REPLAY",
+}
+
+
+def _historical_gate(pred: _Pred, stats: dict | None) -> bool:
+    """Componentes reconstruíveis do quality gate aplicados às apostas simuladas. Nunca relaxa nada:
+    só bloqueia apostas que o gate de produção também bloquearia."""
+    blocked = None
+    if pred.min_sample is not None and pred.min_sample < settings.gate_min_sample:
+        blocked = "SMALL_SAMPLE"
+    elif pred.agreement_pp is not None and pred.agreement_pp > settings.gate_max_disagreement_pp:
+        blocked = "MODEL_DISAGREEMENT"
+    if stats is not None:
+        stats["evaluated"] = stats.get("evaluated", 0) + 1
+        if blocked:
+            stats[blocked] = stats.get(blocked, 0) + 1
+    return blocked is None
 
 
 @dataclass
@@ -354,9 +385,11 @@ class _WindowModels:
         return out
 
 
-def _bets_for(pred: _Pred, model: str) -> list[_Bet]:
-    """Gate simplificado do replay (ver docstring do módulo)."""
+def _bets_for(pred: _Pred, model: str, gate_stats: dict | None = None) -> list[_Bet]:
+    """Gate simplificado do replay (ver docstring do módulo) + HistoricalQualityGate (§13)."""
     bets: list[_Bet] = []
+    if not _historical_gate(pred, gate_stats):
+        return bets
     if pred.odds:
         fair = _fair3(pred.odds)
         best = None
@@ -384,6 +417,12 @@ def _bets_for(pred: _Pred, model: str) -> list[_Bet]:
         if best:
             bets.append(best)
     return bets
+
+
+def _agreement(outs: dict) -> float | None:
+    """Divergência máxima (pp) na probabilidade de casa entre os modelos de gols disponíveis em T."""
+    core = [outs[k][0][0] for k in ("poisson", "dixon_coles", "bivariate_poisson") if k in outs]
+    return float((max(core) - min(core)) * 100.0) if len(core) >= 2 else None
 
 
 def _frame_row(code: str, w_idx: int, r, mid: int, neutral: bool, group: str | None, odds, odds_ou, close, close_ou, outs: dict, wm: _WindowModels, season_start: pd.Timestamp | None) -> dict:
@@ -418,8 +457,7 @@ def _frame_row(code: str, w_idx: int, r, mid: int, neutral: bool, group: str | N
         "month": int(pd.Timestamp(r.date).month), "dow": int(pd.Timestamp(r.date).dayofweek),
         "days_into_group": float((pd.Timestamp(r.date) - season_start).days) if season_start is not None else None,
     })
-    core = [outs[k][0][0] for k in ("poisson", "dixon_coles", "bivariate_poisson") if k in outs]
-    row["agreement_pp"] = float((max(core) - min(core)) * 100.0) if len(core) >= 2 else None
+    row["agreement_pp"] = _agreement(outs)
     return row
 
 
@@ -435,6 +473,7 @@ def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest, *, collec
     windows: list[dict] = []
     rows: list[dict] = []
     group_start: dict[str, pd.Timestamp] = {}
+    gate_stats: dict = {}
     elo = EloTable()
     elo_cursor = first - timedelta(days=1)
     cum_losses: dict[str, list[float]] = {}
@@ -477,15 +516,16 @@ def replay_dataset(frame: pd.DataFrame, code: str, req: ReplayRequest, *, collec
                     group_start[group] = pd.Timestamp(r.date)
                 rows.append(_frame_row(code, w_idx, r, int(mid), neutral, group, odds, odds_ou, close, close_ou, outs, wm, group_start.get(group) if group else None))
             for model, (p3, pou) in outs.items():
-                pr = _Pred(code, w_idx, r.date, model, p3, pou, _outcome(hg, ag), hg + ag > 2.5, hg, ag, odds, odds_ou, close, close_ou, int(mid), group)
+                pr = _Pred(code, w_idx, r.date, model, p3, pou, _outcome(hg, ag), hg + ag > 2.5, hg, ag, odds, odds_ou, close, close_ou, int(mid), group,
+                           min_sample=min(wm.team_features(r.home)["n_train"], wm.team_features(r.away)["n_train"]), agreement_pp=_agreement(outs))
                 preds.append(pr)
                 if model in MODELS:
                     cum_losses.setdefault(model, []).append(-float(np.log(max(EPS, p3[pr.outcome]))))
                 if req.bet_simulation and model in MODELS:
-                    bets.extend(_bets_for(pr, model))
+                    bets.extend(_bets_for(pr, model, gate_stats))
             w_preds += 1
             n_done += 1
-        windows.append({"dataset": code, "window": w_idx, "start": start.date().isoformat(), "end": w_end.date().isoformat(), "train": len(train), "matches": w_preds, "ensemble_weights": ens_w})
+        windows.append({"dataset": code, "window": w_idx, "start": start.date().isoformat(), "end": w_end.date().isoformat(), "train": len(train), "matches": w_preds, "ensemble_weights": ens_w, "gate": dict(gate_stats)})
         start = w_end
         if req.max_matches_per_dataset and n_done >= req.max_matches_per_dataset:
             break
@@ -574,6 +614,19 @@ def _bet_metrics(bets: list[_Bet]) -> dict:
     return out
 
 
+def _gate_totals(windows: list[dict]) -> dict:
+    """Soma, por dataset, do último acumulado do HistoricalQualityGate (predições avaliadas × bloqueadas)."""
+    last: dict[str, dict] = {}
+    for w in windows:
+        if w.get("gate"):
+            last[w["dataset"]] = w["gate"]
+    tot: dict[str, int] = {}
+    for g in last.values():
+        for k, v in g.items():
+            tot[k] = tot.get(k, 0) + int(v)
+    return tot
+
+
 def aggregate(preds: list[_Pred], bets: list[_Bet], windows: list[dict], req: ReplayRequest) -> dict:
     by_model: dict[str, list[_Pred]] = {}
     for p in preds:
@@ -653,9 +706,11 @@ def aggregate(preds: list[_Pred], bets: list[_Bet], windows: list[dict], req: Re
         "models": models_present, "baselines": baselines_present, "labels": MODEL_LABELS,
         "overall": overall, "vs_baseline": vs_baseline, "ranking_brier": ranking, "pairwise": pairwise,
         "by_dataset": by_dataset, "by_group": by_group, "per_window": per_window, "bets": bet_report,
+        "historical_quality_gate": {"components": HISTORICAL_QUALITY_GATE, "applied": _gate_totals(windows),
+                                    "note": "Só os componentes RECONSTRUCTED bloqueiam apostas simuladas; os UNAVAILABLE_IN_REPLAY são declarados, nunca inventados."},
         "limitations": [
             "Odds do football-data são médias pré-jogo (não Superbet) — proxy de mercado.",
-            "Gate simplificado (edge/EV/faixa de odd); sem confiança, frescor, clusters ou correlação.",
+            "Gate parcial: edge/EV/faixa de odd + amostra mínima + divergência entre modelos; sem confiança, frescor, clusters ou correlação (UNAVAILABLE_IN_REPLAY).",
             "Mercados limitados a 1X2 e Over/Under 2,5 — únicos com preço histórico.",
             "Ensemble usa pesos das janelas anteriores; primeiras janelas com pesos iguais.",
         ],

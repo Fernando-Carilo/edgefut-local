@@ -366,6 +366,10 @@ class Recommendation(BaseModel):
     opportunity_adjustments: dict[str, float] | None = None  # Opportunity V3: penalidades aplicadas (pp)
     price: dict | None = None  # price_target(): break_even_odd, min_acceptable_odd, price_gap_pct, edge_sensitivity
     oos: dict | None = None  # checagem out-of-sample do mercado usada no estado (n, verdict)
+    # Iteração 4 — edge bruto vs ajustado, required edge, incerteza, market-aware
+    uncertainty: dict | None = None  # uncertainty_interval(): low, high, half_width_pp, components_pp
+    required_edge: dict | None = None  # required_edge(): required_pp, edge_raw_pp, edge_adjusted_pp, robust, components_pp
+    market_aware: dict | None = None  # selection_lookup(): market, edgefut, hybrid, disagreement_pp, residual_edge_pp, validated, status
 
 
 class NoBetVerdict(BaseModel):
@@ -445,3 +449,5 @@ class MatchAnalysis(BaseModel):
     states: dict[str, int] = Field(default_factory=dict)  # contagem de seleções por estado
     champion: str | None = None  # consenso que decidiu (ensemble | ensemble_v2)
     changes: dict | None = None  # WHY MODEL CHANGED: comparação com o snapshot anterior (analysis.changes)
+    # Iteração 4 — MARKET vs EDGEFUT (artefato market-aware congelado; None sem artefato)
+    market_view: dict | None = None
