@@ -655,17 +655,20 @@ function BaselineTable({ d }: { d: SuperbetEvidenceReport }) {
           </tr>
         </thead>
         <tbody>
-          {[...d.baseline.by_market, { ...all, family: "TODAS" }].map((r) => (
-            <tr key={r.family} className={clsx("border-t border-line/60", r.family === "TODAS" && "font-semibold")}>
-              <td className="py-1">{r.family}</td>
+          {[...d.baseline.by_market, { ...all, family: "TODAS" }].map((r) => {
+            const label = r.family ?? `${r.market_key} (primário)`;
+            return (
+            <tr key={label} className={clsx("border-t border-line/60", r.family === "TODAS" && "font-semibold")}>
+              <td className="py-1">{label}</td>
               <td className="text-right tabular-nums">{int(r.n)}</td>
               <td className="text-right tabular-nums">{int(r.effective_n)}</td>
-              <td className="text-right tabular-nums">{num(r.superbet_fair.brier, 4)}</td>
-              <td className="text-right tabular-nums">{num(r.edgefut.brier, 4)}</td>
+              <td className="text-right tabular-nums">{num(r.superbet_fair.brier?.point, 4)}</td>
+              <td className="text-right tabular-nums">{num(r.edgefut.brier?.point, 4)}</td>
               <td className="text-right"><IntervalText v={r.edgefut_minus_superbet_brier} digits={4} signed /></td>
               <td>{r.winner}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
