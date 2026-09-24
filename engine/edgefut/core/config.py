@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # Scheduler (minutos)
     events_refresh_min: int = 15
     odds_refresh_min: int = 5
+    backup_enabled: bool = True  # iteração 5 — backup diário local (7/4/3)
+    notifications_enabled: bool = True
     history_refresh_hours: int = 24
     scheduler_enabled: bool = True
     live_poll_seconds: int = 30

@@ -335,6 +335,7 @@ def load_settings(session: Session) -> SettingsModel:
         gate_min_sample=settings.gate_min_sample, gate_max_disagreement_pp=settings.gate_max_disagreement_pp,
         gate_max_edge_pp_uncalibrated=settings.gate_max_edge_pp_uncalibrated,
         high_probability_min=settings.high_probability_min, opportunity_weights=dict(settings.opportunity_weights),
+        backup_enabled=settings.backup_enabled, notifications_enabled=settings.notifications_enabled,
     )
     if row and row.value:
         return enforce_floors(base.model_copy(update={k: v for k, v in row.value.items() if k in SettingsModel.model_fields}))
@@ -375,6 +376,8 @@ def apply_settings(model: SettingsModel) -> None:
     settings.gate_max_disagreement_pp = model.gate_max_disagreement_pp
     settings.gate_max_edge_pp_uncalibrated = model.gate_max_edge_pp_uncalibrated
     settings.high_probability_min = model.high_probability_min
+    settings.backup_enabled = model.backup_enabled
+    settings.notifications_enabled = model.notifications_enabled
     if model.opportunity_weights:
         settings.opportunity_weights = dict(model.opportunity_weights)
     else:

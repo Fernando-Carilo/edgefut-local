@@ -265,6 +265,11 @@ class SettingsModel(BaseModel):
     gate_max_edge_pp_uncalibrated: float = 15.0
     high_probability_min: float = 0.65
     opportunity_weights: dict[str, float] = Field(default_factory=dict)  # vazio = padrão do engine
+    # Iteração 5 (§46–§47) — Windows always-on: o shell Tauri lê estas flags
+    background_collector: bool = True  # fechar a janela mantém o coletor (bandeja); False = fechar encerra tudo
+    autostart_on_login: bool = False  # iniciar com o Windows (minimizado na bandeja)
+    notifications_enabled: bool = True  # notificações locais (nunca "BET NOW")
+    backup_enabled: bool = True  # backup diário 7/4/3
 
 
 class BootstrapStatus(BaseModel):

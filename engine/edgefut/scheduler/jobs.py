@@ -483,6 +483,8 @@ def job_flywheel_weekly() -> dict:
 def _backup() -> dict:
     from ..flywheel.storage import create_backup
 
+    if not settings.backup_enabled:
+        return {"ok": True, "skipped": True, "reason": "backup desativado nas configurações"}
     res = create_backup(reason="scheduled")
     return {**res, "records": 1 if res.get("ok") else 0}
 

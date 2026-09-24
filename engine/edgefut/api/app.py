@@ -20,7 +20,7 @@ from ..db.session import get_engine
 from ..providers import CircuitOpen, SourceBlocked, SourceError
 from ..scheduler import jobs
 from . import bootstrap
-from .routers import events_router, radar_router, system_router, tools_router, validation_router
+from .routers import events_router, flywheel_router, radar_router, system_router, tools_router, validation_router
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(radar_router)
     app.include_router(tools_router)
     app.include_router(validation_router)
+    app.include_router(flywheel_router)
     return app
 
 
