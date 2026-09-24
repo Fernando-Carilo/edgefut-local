@@ -327,8 +327,10 @@ O Tauri sobe o sidecar no boot, aguarda `/health`, e só então mostra a janela
 60 s), menu Abrir / Estado do coletor / Ver Data Flywheel / Atualizar / Sair;
 com `background_collector` ligado, fechar a janela esconde-a e o sidecar segue a
 coletar; "Sair" encerra janela, bandeja e sidecar; `tauri-plugin-autostart`
-opcional. Downtime é registado pelo engine no boot seguinte (`collector_gap`),
-nunca preenchido.
+opcional; `tauri-plugin-single-instance` impede 2.ª instância. Como o motor
+sobrevive ao fecho da janela, `windows/hooks.nsh` (`installerHooks` do NSIS)
+encerra `edgefut-engine.exe` antes de instalar/desinstalar. Downtime é registado
+pelo engine no boot seguinte (`collector_gap`), nunca preenchido.
 
 ## 8. Contratos
 

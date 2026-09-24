@@ -261,6 +261,12 @@ pub fn run() {
     let start_in_tray = std::env::args().any(|a| a == TRAY_ARG);
 
     tauri::Builder::default()
+        // Deve ser o primeiro plugin: com o app na bandeja, abrir de novo (atalho/autostart) só traz a
+        // janela existente em vez de criar 2.ª instância, 2.º ícone e disputa pelo engine.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            log::info!("segunda instância pedida → mostrando a janela existente");
+            show_main(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![TRAY_ARG])))

@@ -38,7 +38,8 @@
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
         "languages": ["PortugueseBR"],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "./windows/hooks.nsh"
       },
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
     },

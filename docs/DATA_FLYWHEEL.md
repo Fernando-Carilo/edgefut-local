@@ -153,6 +153,11 @@ O dataset só cresce com o app a correr; por isso a shell Tauri trata o coletor 
 - **Iniciar com o Windows** (`tauri-plugin-autostart`, arg `--tray` → arranca minimizado na bandeja),
   opcional e desligado por defeito.
 - **Downtime** → no boot seguinte o engine grava `collector_gap`; a UI mostra a lacuna, nunca a preenche.
+- **Instância única** (`tauri-plugin-single-instance`): abrir o app com ele na bandeja só traz a janela
+  existente — nunca uma 2.ª instância/2.º ícone.
+- **Instalador/desinstalador** (`src-tauri/windows/hooks.nsh`): como o motor sobrevive ao fecho da janela,
+  os hooks NSIS encerram `edgefut-engine.exe` (e a shell) antes de escrever/apagar ficheiros; sem isto uma
+  atualização falhava com "Erro ao abrir o arquivo pra gravação: …\edgefut-engine.exe".
 - A shell recebe **apenas duas flags** (`background_collector`, `autostart_on_login`); nunca credenciais.
   Nenhuma automação de aposta existe em lado nenhum.
 
