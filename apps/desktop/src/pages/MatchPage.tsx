@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 import { useParams } from "react-router-dom";
 
-import { ClustersPanel, ConfidenceIndicator, ConflictsButton, EvidenceBanner, EventWhyNot, FreshnessStrip, ModelComparisonTable, MovementLine, RecommendationDetail, WhyChangedPanel } from "@/components/TrustPanels";
+import { ClustersPanel, ConfidenceIndicator, ConflictsButton, EvidenceBanner, EventWhyNot, FreshnessStrip, MarketVsEdgeFutPanel, ModelComparisonTable, MovementLine, RecommendationDetail, WhyChangedPanel } from "@/components/TrustPanels";
 import { Card, EdgeValue, ErrorBox, EvidenceChip, GateChip, GradeBadge, KV, Loading, MeterBar, ProbBar, Score, SectionTitle, StatusChip, Tooltip, VenueChip } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useUi } from "@/store/ui";
@@ -168,6 +168,12 @@ export function MatchPage() {
         <Card>
           <SectionTitle title="Teses e exposição" subtitle="Uma PRIMÁRIA por tese (correlation engine). DNB, dupla chance e handicap do mesmo time são a mesma aposta com outro preço — não somam oportunidades." />
           <ClustersPanel a={a} />
+        </Card>
+      )}
+      {a.market_view && (
+        <Card>
+          <SectionTitle title="MARKET vs EDGEFUT" subtitle="Superbet (justa) · EdgeFut (consenso) · Market-aware (híbrido congelado). Divergência de modelo ≠ edge: residual só conta quando validado no holdout congelado." />
+          <MarketVsEdgeFutPanel a={a} />
         </Card>
       )}
       {a.changes && (

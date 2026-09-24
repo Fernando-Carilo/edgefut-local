@@ -453,6 +453,64 @@ export interface Recommendation {
   opportunity_adjustments: Record<string, number> | null;
   price: PriceTarget | null;
   oos: OosCheck | null;
+  // Iteração 4 — edge bruto vs required edge, intervalo de incerteza, bloco market-aware
+  uncertainty?: UncertaintyInterval | null;
+  required_edge?: RequiredEdge | null;
+  market_aware?: MarketAwareRow | null;
+}
+
+/** §21–§23: intervalo de incerteza da probabilidade do modelo (spread entre membros ⊕ calibração ⊕ amostra). */
+export interface UncertaintyInterval {
+  low: number;
+  high: number;
+  half_width_pp: number;
+  components_pp: { member_spread: number; calibration: number; sample: number };
+  n_members: number;
+}
+
+/** §24: required edge = margem + incerteza + penalidades; `robust` = edge bruto ≥ required. */
+export interface RequiredEdge {
+  required_pp: number;
+  edge_raw_pp: number;
+  edge_adjusted_pp: number;
+  robust: boolean;
+  components_pp: { margin: number; uncertainty: number; calibration: number; sample: number; market_efficiency: number };
+  gap_pp: number;
+}
+
+export type MarketEdgeVerdict = "CHALLENGER BEATS MARKET (OOS)" | "PROMISING · NOT CONFIRMED" | "NO EVIDENCE OF MARKET EDGE" | "INSUFFICIENT DATA" | string;
+
+/** §36–§37: por seleção — mercado (justa), EdgeFut, híbrido congelado; divergência ≠ residual edge. */
+export interface MarketAwareRow {
+  market: number;
+  edgefut: number;
+  hybrid: number;
+  disagreement_pp: number;
+  residual_edge_pp: number;
+  validated: boolean;
+  status: MarketEdgeVerdict;
+}
+
+export interface MarketViewMarket {
+  challenger: "blend" | "logistic" | "residual" | string;
+  alpha: number | null;
+  all_challengers: Record<string, number[]>;
+  validation_status: MarketEdgeVerdict;
+  residual_validated: boolean;
+  selections: Record<string, Omit<MarketAwareRow, "validated" | "status">>;
+  interpretation: string;
+}
+
+/** Bloco MARKET vs EDGEFUT da página do jogo (1X2 e OU 2,5), a partir do artefato market-aware congelado. */
+export interface MarketView {
+  model_hash: string;
+  config_hash: string;
+  dataset_version: string;
+  frozen_at: string;
+  validation_source: "holdout" | "discovery" | null;
+  features_imputed: string[];
+  note: string;
+  markets: Record<"1X2" | "OU25" | string, MarketViewMarket>;
 }
 
 /** Cluster de correlação: uma PRIMÁRIA por tese; alternativas (`market|selection|line`) não são oportunidades extra. */
@@ -572,6 +630,8 @@ export interface MatchAnalysis {
   states: Record<string, number>;
   champion: string | null;
   changes: ModelChanges | null;
+  // Iteração 4
+  market_view?: MarketView | null;
 }
 
 // ---- API ---------------------------------------------------------------
@@ -762,7 +822,17 @@ export interface ModelHealth {
   settlement?: { settled: number; pending: number; error: number; unclassified: number; unsettled_finished: number; last_reconciliation: string | null };
   shadow?: { total: number; settled: number; sample_quality: SampleQuality };
   decay?: { half_life_days: number; selected_by_walk_forward: number | null; tie_with_runner_up: boolean | null; run_id: number | null };
+  v2?: ModelHealthV2 | null;
   notes?: string[];
+}
+
+/** MODEL HEALTH V2 (§49): cinco linhas, cada uma com N e fonte. MARKET EDGE só sai de UNPROVEN via holdout congelado + CLV ≥ 0. */
+export interface ModelHealthV2 {
+  football_model: { status: "UNVALIDATED" | "WEAK" | "PREDICTIVE (vs naive)" | string; vs_naive?: Significance | null; vs_market?: Significance | null; champion_brier?: number | null; market_brier?: number | null; matches?: number | null; text: string };
+  market_model: { status: string; source: "holdout" | "discovery" | null; markets: Record<string, MarketEdgeVerdict>; model_hash: string | null };
+  superbet_evidence: { status: "COLLECTING" | "NONE"; events: number | null; snapshots_pre_kickoff: number | null; closing_events: number | null; buckets_present: string[] | null; clv_n: number | null; generated_at: string | null };
+  shadow_settled: { raw_n: number; events: number; effective_n: number; sample_quality: SampleQuality; status: "INSUFFICIENT" | "MEASURABLE" };
+  market_edge: { status: "UNPROVEN" | "PROVEN"; detail: string; text: string };
 }
 
 export interface ModelHealthReplay {
@@ -1219,7 +1289,240 @@ export interface ShadowReport {
   /** janelas 7d / 30d / 90d / all → { priced, value_only, model_only } */
   performance: Record<string, { priced: ShadowPerf; value_only: ShadowPerf; model_only: ShadowPerf }>;
   by_market: Record<string, ShadowPerf>;
+  // Iteração 4 (§46–§48)
+  market_aware?: ShadowMarketAwarePanel;
+  confidence_validation?: ShadowBucketValidation & { grades: Record<string, ShadowBucket>; brier_monotonic_by_grade: boolean | null };
+  opportunity_validation?: ShadowBucketValidation & { bins: Record<string, ShadowBucket>; roi_increasing_with_score: boolean | null };
   notes: string[];
+}
+
+export interface EffectiveSample {
+  raw_n: number;
+  clusters: number;
+  effective_n: number;
+  rho: number;
+  avg_cluster_size?: number;
+}
+
+export interface ShadowMarketAwarePanel {
+  raw_n: number;
+  events: number;
+  markets: string[];
+  effective: EffectiveSample;
+  sample_quality: SampleQuality;
+  states: Record<string, number>;
+  value_count: number;
+  no_bet_count: number;
+  superbet_fair?: { brier: Interval; log_loss: Interval };
+  edgefut?: { brier: Interval; log_loss: Interval };
+  edgefut_vs_superbet?: { delta_brier: Interval; delta_logloss: Interval };
+  hybrid?: { n: number; brier?: Interval; log_loss?: Interval; delta_brier_vs_superbet?: Interval; note?: string };
+  clv?: { n: number; events: number; pct: Interval | null };
+  verdict: "INSUFFICIENT DATA" | "EDGEFUT BETTER THAN SUPERBET (SHADOW)" | "SUPERBET BETTER (SHADOW)" | "NO CLEAR ADVANTAGE" | string;
+}
+
+export interface ShadowBucket {
+  label: string;
+  n: number;
+  events: number;
+  avg_model_prob: number;
+  hit_rate: Interval;
+  brier: Interval;
+  roi?: Interval;
+}
+
+export interface ShadowBucketValidation {
+  n: number;
+  effective: EffectiveSample;
+  verdict: string;
+  note: string;
+}
+
+// ---- Iteração 4: market-aware (RESEARCH MARKET BENCHMARK) -----------------
+
+export interface MarketAwareVsRow {
+  n: number;
+  brier_a: number;
+  brier_b: number;
+  lift_pct: number;
+  delta_brier_ci: Interval;
+  delta_logloss_ci: Interval;
+  windows_better: number;
+  windows_total: number;
+  p_value: number | null;
+  significance: Significance | string;
+}
+
+export interface MarketAwareModelMetrics {
+  n: number;
+  sample_quality: SampleQuality;
+  brier: Interval;
+  log_loss: Interval;
+  ece: number | null;
+  hit_rate: number | null;
+  decomposition?: { n: number; brier: number; reliability: number; resolution: number; uncertainty: number; bins: unknown[] } | null;
+}
+
+export interface PromotionCriterion {
+  value: number | string | null;
+  pass: boolean;
+}
+
+export interface MarketAwarePromotionCheck {
+  challenger: string;
+  criteria: Record<"brier_better" | "logloss_not_worse" | "calibration_not_worse" | "stable_windows" | "effective_n", PromotionCriterion>;
+  pass: boolean;
+  delta_brier: number | null;
+  significance: string | null;
+}
+
+export interface MarketAwareVerdict {
+  status: MarketEdgeVerdict;
+  challenger: string | null;
+  checks: Record<string, MarketAwarePromotionCheck>;
+}
+
+export interface DisagreementBucket {
+  bucket: string;
+  n: number;
+  sample_quality: SampleQuality;
+  brier_market: number;
+  brier_edgefut: number;
+  brier_blend?: number;
+  brier_logistic?: number;
+  brier_residual?: number;
+  edgefut_vs_market: { delta_brier_ci: Interval; significance: string };
+  favored_side: { observed_rate: number; market_prob: number; model_prob: number };
+}
+
+export interface ContrarianTest {
+  n: number;
+  threshold_pp: number;
+  observed_rate: number;
+  observed_ci: Interval;
+  market_prob: number;
+  edgefut_prob: number;
+  closer_to_observed: "MARKET" | "EDGEFUT" | string;
+  verdict: "MARKET CORRECT" | "EDGEFUT CORRECT" | "INSUFFICIENT DATA" | string;
+  note: string;
+}
+
+export interface SegmentRow {
+  segment: string;
+  n: number;
+  sample_quality: SampleQuality;
+  brier_market: number;
+  brier_edgefut: number;
+  delta_ci: Interval;
+  p_value: number | null;
+  verdict?: string;
+  [k: string]: unknown;
+}
+
+export interface MarketAwareMarketReport {
+  market: string;
+  n: number;
+  windows: number;
+  effective_sample: EffectiveSample;
+  overall: Record<string, MarketAwareModelMetrics>;
+  vs_market: Record<string, MarketAwareVsRow>;
+  vs_edgefut: Record<string, MarketAwareVsRow>;
+  ranking_brier: [string, number][];
+  alpha: { chosen_per_window: Record<string, number>; mean: number; share_alpha_1: number; note: string } | null;
+  ablation: { variant: string; features: string[]; brier: number; log_loss: number; delta_brier_vs_market: Interval; significance: string }[];
+  disagreement_buckets: DisagreementBucket[];
+  contrarian: ContrarianTest | null;
+  segments: { challenger: string; rows: SegmentRow[]; fdr: { q: number; tested: number; survivors: string[]; adjusted: Record<string, number> }; note: string } | null;
+  by_dataset: Record<string, Record<string, number>>;
+  windows_log: { window: number; test_start: string; test_end: string; train: number; validation?: number; test: number; alpha: number | null; [k: string]: unknown }[];
+}
+
+export interface MarketAwareReport {
+  phase: "DISCOVERY" | "CONFIRMATION (FROZEN HOLDOUT)" | string;
+  config_hash: string;
+  dataset_version: string;
+  model_hash?: string;
+  run_timestamp?: string;
+  holdout_start: string;
+  holdout_rows: number;
+  discovery_rows?: number;
+  period?: { start: string; end: string };
+  markets: Record<string, MarketAwareMarketReport>;
+  classification: "RESEARCH MARKET BENCHMARK" | string;
+  features?: { approved_groups: string[]; residual_groups: string[]; forbidden: string[]; data_quality: string };
+  verdict: Record<string, MarketAwareVerdict>;
+  duration_ms?: number;
+  generated_at?: string;
+}
+
+export interface MarketAwareRun {
+  id: number;
+  created_at: string;
+  summary: Record<string, unknown> & { verdict?: Record<string, MarketAwareVerdict>; model_hash?: string; config_hash?: string; dataset_version?: string; repeated?: boolean; error?: string };
+  detail: MarketAwareReport | null;
+}
+
+export interface MarketAwareLatestResponse {
+  running: boolean;
+  holdout_running: boolean;
+  meta: { challengers: Record<string, string>; feature_groups: string[]; forbidden: string[]; [k: string]: unknown };
+  frame_available: boolean;
+  discovery: MarketAwareRun | null;
+  holdout: MarketAwareRun | null;
+  holdout_repeats: MarketAwareRun[];
+  holdout_consumed: boolean;
+  active_artifact: { model_hash: string; config_hash: string; dataset_version: string; frozen_at: string; holdout_start: string; base_model: string; markets: Record<string, { alpha: number | null; selected: string; train_rows: number }> } | null;
+}
+
+// ---- Iteração 4: Superbet (SUPERBET SHADOW VALIDATION) ---------------------
+
+export interface OverroundRow {
+  market_key?: string;
+  line?: number | null;
+  category_name?: string | null;
+  competition_name?: string | null;
+  fav_band?: string;
+  ttk_bucket?: string;
+  groups: number;
+  events: number;
+  overround_median_pct: number;
+  overround_mean_pct: number;
+  p10_pct: number;
+  p90_pct: number;
+}
+
+export interface SuperbetEvidenceReport {
+  classification: "SUPERBET SHADOW VALIDATION" | string;
+  dataset_version: string;
+  generated_at: string;
+  coverage: { snapshots_pre_kickoff: number; snapshots_live_excluded: number; events: number; selections: number; snapshots_per_selection_median: number | null; cadence_minutes_median: number | null; first_collected: string | null; last_collected: string | null; markets: Record<string, number> };
+  buckets: { bucket: string; minutes: [number, number]; snapshots: number; events: number; events_share: number; exists: boolean }[];
+  closing_lines: { rows: number; events: number };
+  overround: { by_market: OverroundRow[]; by_market_line: OverroundRow[]; by_competition: OverroundRow[]; by_odds_band: OverroundRow[]; by_time_to_kickoff: OverroundRow[]; note: string };
+  line_movement: { n_selections: number; n_with_2plus_snapshots: number; by_market: { market_key: string; n: number; events: number; share_moved_gt_0_5pp: number | null; abs_move_pp_median: number | null; abs_move_pp_p90: number | null; net_move_pp_mean: number | null; opening_minutes_before_median: number | null; closing_minutes_before_median: number | null }[]; favourite_drift_corr_1x2: number | null; favourite_drift_note: string };
+  bias: { n: number; events: number; rows: { segment: string; n: number; events: number; sample_quality: SampleQuality; observed_rate: number | null; fair_prob_mean: number | null; brier_fair: number | null; effective_n: number; verdict: string }[]; note: string };
+  baseline: { n: number; events: number; by_market: { family: string; n: number; events: number; effective_n: number; sample_quality: SampleQuality; superbet_fair: { brier: number | null; log_loss: number | null; n: number }; edgefut: { brier: number | null; log_loss: number | null; n: number }; edgefut_minus_superbet_brier: Interval | null; winner: string }[]; all: { n: number; events: number; effective_n: number; sample_quality: SampleQuality; superbet_fair: { brier: number | null; log_loss: number | null; n: number }; edgefut: { brier: number | null; log_loss: number | null; n: number }; edgefut_minus_superbet_brier: Interval | null; winner: string } };
+  clv: { n_priced: number; n_with_closing: number; events_with_closing: number; by_family: { family: string; n: number; events: number; clv_pct: Interval | null; share_positive: number | null }[]; by_state: { state: string; n: number; events: number; clv_pct: Interval | null; share_positive: number | null }[]; all: { n: number; events: number; clv_pct: Interval | null; share_positive: number | null } | null; note: string };
+  time_to_kickoff: { bucket: string; n: number; events: number; sample_quality: SampleQuality; brier?: number | null; hit_rate?: number | null; clv_pct?: Interval | null; [k: string]: unknown }[];
+  shadow_panel: { families: ShadowPanelRow[]; total: ShadowPanelRow; by_market: ShadowPanelRow[] };
+  notes: string[];
+  export?: { dataset_version: string; files: Record<string, { path: string; rows: number; sha16: string }> };
+  duration_ms?: number;
+}
+
+export interface ShadowPanelRow {
+  family?: string;
+  market_key?: string;
+  events: number;
+  predictions: number;
+  settled: number;
+  pending: number;
+  errors: number;
+  upcoming: number;
+  settled_events: number;
+  priced: number;
+  value: number;
+  observation: number;
 }
 
 export interface DriftReport {

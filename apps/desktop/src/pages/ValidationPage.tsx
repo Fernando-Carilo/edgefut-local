@@ -8,7 +8,9 @@ import { useState } from "react";
 import { Card, Empty, ErrorBox, KV, Loading, PageHeader, SectionTitle, Segmented, Stat } from "@/components/ui";
 import { api } from "@/lib/api";
 
-type Tab = "replay" | "modelos" | "cobertura" | "shadow" | "drift";
+import { MarketAwareTab, ShadowMarketAwareSection, SuperbetTab } from "./MarketAwarePanels";
+
+type Tab = "replay" | "modelos" | "market" | "superbet" | "cobertura" | "shadow" | "drift";
 
 const SIG_CLS: Record<Significance, string> = {
   "INSUFFICIENT DATA": "bg-gray-100 text-ink-2",
@@ -63,6 +65,8 @@ export function ValidationPage() {
             options={[
               { value: "replay", label: "Model Validation" },
               { value: "modelos", label: "Model Comparison" },
+              { value: "market", label: "Market-Aware" },
+              { value: "superbet", label: "Superbet" },
               { value: "cobertura", label: "Coverage Map" },
               { value: "shadow", label: "Shadow" },
               { value: "drift", label: "Drift" },
@@ -73,6 +77,8 @@ export function ValidationPage() {
       />
       {tab === "replay" && <ReplayTab />}
       {tab === "modelos" && <ModelsTab />}
+      {tab === "market" && <MarketAwareTab />}
+      {tab === "superbet" && <SuperbetTab />}
       {tab === "cobertura" && <CoverageTab />}
       {tab === "shadow" && <ShadowTab />}
       {tab === "drift" && <DriftTab />}
@@ -572,6 +578,7 @@ function ShadowTab() {
           </table>
         )}
       </Card>
+      <ShadowMarketAwareSection d={d} />
       {Object.keys(d.by_market ?? {}).length > 0 && (
         <Card>
           <SectionTitle title="Por mercado (com preço)" />

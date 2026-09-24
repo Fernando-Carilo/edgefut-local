@@ -350,6 +350,7 @@ export function RecommendationDetail({ r, evidence }: { r: Recommendation; evide
         </div>
       )}
       {r.price && r.state !== "MODEL_ONLY" && <PriceTargetBlock r={r} />}
+      {r.required_edge && r.state !== "MODEL_ONLY" && <RequiredEdgeBlock r={r} />}
 
       <div className="mt-2 rounded-lg bg-bg px-3 py-2 text-xs">
         <span className="font-semibold">RAW vs CALIBRATED:</span> probabilidade crua {pct(raw, 1)}
@@ -455,6 +456,113 @@ function PriceTargetBlock({ r }: { r: Recommendation }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Iteração 4: RAW vs ADJUSTED edge, required edge, incerteza (§21–§24, §37)
+const signed = (v: number, d = 1) => `${v > 0 ? "+" : ""}${v.toFixed(d)}`;
+
+export function RequiredEdgeBlock({ r }: { r: Recommendation }) {
+  const req = r.required_edge!;
+  const unc = r.uncertainty;
+  const ma = r.market_aware;
+  const notRobust = r.reasons.includes("EDGE_NOT_ROBUST");
+  const c = req.components_pp;
+  return (
+    <div className={clsx("mt-2 rounded-lg px-3 py-2 text-xs", notRobust ? "bg-warning-50/60" : "bg-bg")}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="font-semibold">EDGE BRUTO vs AJUSTADO:</span>
+        <span>
+          bruto <b className={clsx("tabular-nums", req.edge_raw_pp > 0 ? "text-ink" : "text-danger")}>{signed(req.edge_raw_pp)} pp</b>
+        </span>
+        <span>
+          ajustado por incerteza <b className={clsx("tabular-nums", req.edge_adjusted_pp > 0 ? "text-ink" : "text-danger")}>{signed(req.edge_adjusted_pp)} pp</b>
+        </span>
+        <span>
+          required edge <b className="tabular-nums">{req.required_pp.toFixed(1)} pp</b>{" "}
+          <span className="text-ink-3" title={`margem ${c.margin} + incerteza ${c.uncertainty} + calibração ${c.calibration} + amostra OOS ${c.sample} + eficiência do mercado ${c.market_efficiency}`}>
+            (margem {c.margin.toFixed(1)} · incerteza {c.uncertainty.toFixed(1)} · calibração {c.calibration.toFixed(1)} · amostra {c.sample.toFixed(1)} · mercado {c.market_efficiency.toFixed(1)})
+          </span>
+        </span>
+        <span className={clsx("chip", req.robust ? "bg-success-50 text-success" : "bg-warning-50 text-warning")}>{req.robust ? "EDGE ROBUSTO" : "EDGE NÃO ROBUSTO"}</span>
+      </div>
+      {unc && (
+        <div className="mt-1 text-ink-2">
+          Intervalo de incerteza da probabilidade: <b className="tabular-nums">{pct(unc.low, 1)} – {pct(unc.high, 1)}</b> (±{unc.half_width_pp.toFixed(1)} pp = spread entre {unc.n_members} modelo(s) {unc.components_pp.member_spread.toFixed(1)} ⊕ calibração {unc.components_pp.calibration.toFixed(1)} ⊕ amostra {unc.components_pp.sample.toFixed(1)}).
+        </div>
+      )}
+      {ma && (
+        <div className="mt-1 text-ink-2">
+          <span className="font-semibold">MODEL DISAGREEMENT</span> {signed(ma.disagreement_pp)} pp (EdgeFut − Superbet) · <span className="font-semibold">RESIDUAL EDGE</span> {signed(ma.residual_edge_pp)} pp (híbrido − Superbet) ·{" "}
+          <span className={clsx("chip", ma.validated ? "bg-success-50 text-success" : "bg-gray-100 text-ink-2")}>{ma.validated ? "RESIDUAL VALIDADO (holdout)" : "NÃO VALIDADO"}</span>
+          {!ma.validated && <span className="ml-1 text-ink-3">— {ma.status}: divergência não é edge.</span>}
+        </div>
+      )}
+      {notRobust && <div className="mt-1 font-semibold text-warning">Edge bruto abaixo do required edge: fica em OBSERVATION, nunca VALUE.</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Iteração 4: MARKET vs EDGEFUT (§36)
+export function MarketVsEdgeFutPanel({ a }: { a: MatchAnalysis }) {
+  const mv = a.market_view;
+  if (!mv) return null;
+  const labels: Record<string, Record<string, string>> = {
+    "1X2": { HOME: a.home.name, DRAW: "Empate", AWAY: a.away.name },
+    OU25: { OVER: "Over 2,5", UNDER: "Under 2,5" },
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+        <span className="chip bg-gray-100 text-ink-2">{mv.validation_source === "holdout" ? "HOLDOUT CONGELADO" : mv.validation_source === "discovery" ? "DISCOVERY (não confirmado)" : "SEM VALIDAÇÃO"}</span>
+        <span>model_hash {mv.model_hash}</span>
+        <span>· config {mv.config_hash}</span>
+        <span>· {mv.dataset_version}</span>
+        {mv.features_imputed.length > 0 && <span>· features imputadas: {mv.features_imputed.join(", ")}</span>}
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        {Object.entries(mv.markets).map(([mk, m]) => (
+          <div key={mk} className="rounded-lg border border-line p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold uppercase tracking-wide">{mk === "OU25" ? "Over/Under 2,5" : mk}</span>
+              <span className={clsx("chip", m.residual_validated ? "bg-success-50 text-success" : m.validation_status.startsWith("NO EVIDENCE") ? "bg-gray-100 text-ink-2" : "bg-warning-50 text-warning")} title={`Challenger ${m.challenger}${m.alpha !== null ? ` · α=${m.alpha}` : ""}`}>
+                {m.validation_status}
+              </span>
+            </div>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[10px] uppercase text-ink-3">
+                  <th className="text-left font-semibold">Seleção</th>
+                  <th className="text-right font-semibold">Superbet</th>
+                  <th className="text-right font-semibold">EdgeFut</th>
+                  <th className="text-right font-semibold">Market-aware</th>
+                  <th className="text-right font-semibold">Diverg.</th>
+                  <th className="text-right font-semibold">Residual</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(m.selections).map(([sk, s]) => (
+                  <tr key={sk} className="border-t border-line/60">
+                    <td className="py-1">{labels[mk]?.[sk] ?? sk}</td>
+                    <td className="py-1 text-right tabular-nums">{pct(s.market, 1)}</td>
+                    <td className="py-1 text-right tabular-nums">{pct(s.edgefut, 1)}</td>
+                    <td className="py-1 text-right tabular-nums font-semibold">{pct(s.hybrid, 1)}</td>
+                    <td className={clsx("py-1 text-right tabular-nums", Math.abs(s.disagreement_pp) >= 5 ? "text-warning" : "text-ink-2")}>{signed(s.disagreement_pp)} pp</td>
+                    <td className={clsx("py-1 text-right tabular-nums", m.residual_validated ? "text-ink" : "text-ink-3")}>{signed(s.residual_edge_pp)} pp</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-2 text-[11px] text-ink-2">{m.interpretation}</div>
+            <div className="mt-1 text-[10px] text-ink-3">
+              α = {m.alpha ?? "—"} ({m.challenger}) · outros challengers:{" "}
+              {Object.entries(m.all_challengers).map(([ch, ps]) => `${ch} ${ps.map((p) => pct(p, 0)).join("/")}`).join(" · ")}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="text-[11px] text-ink-3">{mv.note}</div>
     </div>
   );
 }

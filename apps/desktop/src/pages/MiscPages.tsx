@@ -11,6 +11,8 @@ import { EventRow } from "@/components/EventCard";
 import { ageLabel, Card, Empty, ErrorBox, EvidenceChip, FreshnessChip, GradeBadge, HealthChip, HealthDot, KV, Loading, NoBetChip, PageHeader, SectionTitle, Segmented, Stat, Tooltip } from "@/components/ui";
 import { api } from "@/lib/api";
 
+import { MarketEfficiencyLab, SuperbetTab } from "./MarketAwarePanels";
+
 // ---------------------------------------------------------------- Ao vivo (observação)
 export function LivePage() {
   const q = useQuery({ queryKey: ["live"], queryFn: () => api.live(), refetchInterval: 15000 });
@@ -533,7 +535,7 @@ const METRIC_HELP = {
 
 export function PerformancePage() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<"resultados" | "calibracao">("resultados");
+  const [tab, setTab] = useState<"resultados" | "calibracao" | "market" | "superbet">("resultados");
   const q = useQuery({ queryKey: ["performance"], queryFn: api.performance });
   const settle = useMutation({ mutationFn: api.settle, onSuccess: () => qc.invalidateQueries({ queryKey: ["performance"] }) });
   if (q.isLoading) return <Loading />;
@@ -547,14 +549,27 @@ export function PerformancePage() {
         subtitle={d.note}
         right={
           <>
-            <Segmented value={tab} options={[{ value: "resultados", label: "Resultados" }, { value: "calibracao", label: "Calibração" }]} onChange={setTab} />
+            <Segmented
+              value={tab}
+              options={[
+                { value: "resultados", label: "Resultados" },
+                { value: "calibracao", label: "Calibração" },
+                { value: "market", label: "Market Efficiency Lab" },
+                { value: "superbet", label: "Superbet Lab" },
+              ]}
+              onChange={setTab}
+            />
             <button className="btn-outline" onClick={() => settle.mutate()} disabled={settle.isPending}>
               <RefreshCw size={14} className={settle.isPending ? "animate-spin" : ""} /> Liquidar pendentes
             </button>
           </>
         }
       />
-      {tab === "calibracao" ? (
+      {tab === "market" ? (
+        <MarketEfficiencyLab />
+      ) : tab === "superbet" ? (
+        <SuperbetTab lab />
+      ) : tab === "calibracao" ? (
         <CalibrationTab />
       ) : d.settled_snapshots === 0 ? (
         <Empty

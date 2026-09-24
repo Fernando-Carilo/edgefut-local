@@ -142,6 +142,41 @@ function ModelHealthStrip({ h, onOpen }: { h: ModelHealth; onOpen: () => void })
       <button className="btn-ghost ml-auto text-xs" onClick={onOpen}>
         Ver validação
       </button>
+      {h.v2 && <ModelHealthV2Row v2={h.v2} />}
     </Card>
+  );
+}
+
+/** MODEL HEALTH V2 (§49): FOOTBALL MODEL · MARKET MODEL · SUPERBET EVIDENCE · SHADOW SETTLED N · MARKET EDGE. */
+function ModelHealthV2Row({ v2 }: { v2: NonNullable<ModelHealth["v2"]> }) {
+  const chip = (ok: boolean | null, warn = false) => clsx("chip", ok ? "bg-success-50 text-success" : warn ? "bg-warning-50 text-warning" : "bg-gray-100 text-ink-2");
+  const fm = v2.football_model;
+  const mm = v2.market_model;
+  const se = v2.superbet_evidence;
+  const ss = v2.shadow_settled;
+  const me = v2.market_edge;
+  return (
+    <div className="grid w-full grid-cols-2 gap-x-4 gap-y-1 border-t border-line pt-2 md:grid-cols-5">
+      <span title={fm.text}>
+        <span className="block text-[10px] font-semibold uppercase text-ink-3">Football model</span>
+        <span className={chip(fm.status.startsWith("PREDICTIVE"), fm.status === "WEAK")}>{fm.status}</span>
+      </span>
+      <span title={`Fonte: ${mm.source ?? "—"} · model_hash ${mm.model_hash ?? "—"} · ${Object.entries(mm.markets).map(([k, v]) => `${k}: ${v}`).join(" · ")}`}>
+        <span className="block text-[10px] font-semibold uppercase text-ink-3">Market model</span>
+        <span className={chip(mm.status.startsWith("PROVEN"))}>{mm.status}</span>
+      </span>
+      <span title={`buckets: ${(se.buckets_present ?? []).join(", ") || "—"} · closing em ${int(se.closing_events ?? 0)} eventos · CLV N=${int(se.clv_n ?? 0)}`}>
+        <span className="block text-[10px] font-semibold uppercase text-ink-3">Superbet evidence</span>
+        <span className={chip(se.status === "COLLECTING")}>{se.status}</span> {se.events !== null && <span>{int(se.events)} eventos · {int(se.snapshots_pre_kickoff ?? 0)} snapshots pré-kickoff</span>}
+      </span>
+      <span title="Raw N = seleções liquidadas; Effective N corrige a correlação entre seleções do mesmo jogo (§19).">
+        <span className="block text-[10px] font-semibold uppercase text-ink-3">Shadow settled N</span>
+        <span className={chip(ss.status === "MEASURABLE", ss.status === "INSUFFICIENT")}>{ss.status}</span> <span>raw {int(ss.raw_n)} · efetivo {int(ss.effective_n)} · {int(ss.events)} jogos</span>
+      </span>
+      <span title={me.text}>
+        <span className="block text-[10px] font-semibold uppercase text-ink-3">Market edge</span>
+        <span className={chip(me.status === "PROVEN", true)}>{me.status === "UNPROVEN" ? "MARKET EDGE UNPROVEN" : me.detail}</span>
+      </span>
+    </div>
   );
 }

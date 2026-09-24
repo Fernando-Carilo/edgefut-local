@@ -21,6 +21,7 @@ import type {
   HistoryResponse,
   JobsResponse,
   LiveResponse,
+  MarketAwareLatestResponse,
   MatchAnalysis,
   ModelsResponse,
   MultipleLeg,
@@ -35,6 +36,7 @@ import type {
   SourcesResponse,
   StakeRequest,
   StakeResponse,
+  SuperbetEvidenceReport,
   SystemHealthResponse,
   VenueOverride,
 } from "@edgefut/contracts";
@@ -152,4 +154,12 @@ export const api = {
   drift: (live = false) => request<DriftReport>(`/validation/drift${qs({ live })}`),
   coverage: () => request<CoverageResponse>("/validation/coverage"),
   governance: () => request<GovernanceResponse>("/validation/governance"),
+
+  // Iteração 4 — market-aware (RESEARCH MARKET BENCHMARK) e Superbet (SUPERBET SHADOW VALIDATION)
+  marketAwareLatest: () => request<MarketAwareLatestResponse>("/validation/market-aware/latest"),
+  startMarketAware: (body: Record<string, unknown> = {}) =>
+    request<{ ok: boolean; started?: boolean; skipped?: boolean; correlation_id?: string }>("/validation/market-aware", { method: "POST", body: JSON.stringify(body) }),
+  startHoldout: (run_id?: number) =>
+    request<{ ok: boolean; started?: boolean; correlation_id?: string }>("/validation/market-aware/holdout", { method: "POST", body: JSON.stringify({ run_id: run_id ?? null, force: false }) }),
+  superbetEvidence: (live = false) => request<SuperbetEvidenceReport>(`/validation/superbet${qs({ live })}`),
 };

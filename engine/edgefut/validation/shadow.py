@@ -154,7 +154,7 @@ def _bucket_perf(rows: list[ShadowPrediction], label: str) -> dict:
     if priced:
         pw = np.array([1.0 if r.won else 0.0 for r in priced])
         po = np.array([float(r.odd) for r in priced])
-        out["roi"] = cluster_bootstrap_ci(np.where(pw == 1, po - 1.0, -1.0), np.array([r.event_id for r in priced]), zero_test=True).to_dict()
+        out["roi"] = cluster_bootstrap_ci(np.where(pw == 1, po - 1.0, -1.0), np.array([r.event_id for r in priced]), stat=roi_stat, zero_test=True).to_dict()
     return out
 
 
